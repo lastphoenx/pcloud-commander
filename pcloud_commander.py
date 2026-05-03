@@ -88,12 +88,14 @@ if not pc:
 
 from textual.app import App, ComposeResult
 from textual.theme import Theme
-from textual.widgets import Header, Footer, Static, DirectoryTree, Label, Tree, OptionList
+from textual.widgets import (
+    Header, Footer, Static, DirectoryTree, Label, Tree,
+    OptionList, Button, Input, Switch, Select, ListView, ListItem,
+)
 from textual.widgets.option_list import Option
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.binding import Binding
 from textual.screen import ModalScreen
-from textual.widgets import Button
 from rich.text import Text
 
 
@@ -409,6 +411,108 @@ CUSTOM_CSS = """
     #btn-cancel, #btn-no {
         background: $error;
     }
+
+    /* ── Script Dashboard ───────────────────────────────────────── */
+    ScriptDashboardScreen {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.85);
+    }
+    #dash-box {
+        width: 95%;
+        height: 90%;
+        border: double $primary;
+        background: $surface;
+    }
+    #dash-header {
+        height: 1;
+        background: $panel;
+        color: $primary;
+        text-style: bold;
+        padding: 0 1;
+    }
+    #dash-main {
+        height: 1fr;
+    }
+    #dash-left {
+        width: 45%;
+        border-right: solid $border;
+    }
+    #dash-right {
+        width: 1fr;
+        padding: 0 1;
+    }
+    #script-list {
+        height: 1fr;
+        border: none;
+    }
+    .cat-header {
+        background: $panel;
+        color: $primary;
+        text-style: bold;
+        padding: 0 1;
+    }
+    #dash-detail {
+        height: 1fr;
+        padding: 1 1;
+    }
+
+    /* ── Script Form ────────────────────────────────────────────── */
+    ScriptFormScreen {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.85);
+    }
+    #form-box {
+        width: 70%;
+        height: 90%;
+        border: double $primary;
+        background: $surface;
+    }
+    #form-title {
+        height: 2;
+        background: $panel;
+        color: $primary;
+        text-style: bold;
+        padding: 0 2;
+        content-align: left middle;
+    }
+    #form-desc {
+        height: 2;
+        padding: 0 2;
+        color: $foreground;
+        content-align: left middle;
+    }
+    #form-badges {
+        height: 1;
+        padding: 0 2;
+        color: $text-muted;
+    }
+    #form-divider {
+        height: 1;
+        background: $border;
+    }
+    #form-params {
+        height: 1fr;
+        padding: 0 2;
+    }
+    .param-label {
+        height: 1;
+        margin-top: 1;
+        color: $foreground;
+        text-style: bold;
+    }
+    .param-widget {
+        width: 1fr;
+    }
+    .param-help {
+        height: 1;
+        color: $text-muted;
+        text-style: italic;
+    }
+    #form-buttons {
+        height: 3;
+        align: center middle;
+        margin: 1 0;
+    }
     """
 
 
@@ -475,6 +579,217 @@ class ActionMenu(ModalScreen):
             if option_list.highlighted is not None:
                 option = option_list.get_option_at_index(option_list.highlighted)
                 self.dismiss(option.id)
+
+
+# ==================== Script Dashboard + Form ====================
+
+
+class ScriptDashboardScreen(ModalScreen):
+    """Full-screen script launcher: grouped script tiles on left, detail on right."""
+
+    BINDINGS = [Binding("escape", "dismiss_screen", "Close")]
+
+    def __init__(
+        self,
+        catalog: List[Dict[str, Any]],
+        quick_actions: List[tuple],
+        autofill_fn,
+    ) -> None:
+        super().__init__()
+        self.catalog = catalog
+        self.quick_actions = quick_actions  # [(label, cmd_key), ...]
+        self.autofill_fn = autofill_fn
+        self._entries: List[Optional[Dict]] = []  # None = category header
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dash-box"):
+            yield Static(
+                " Script Dashboard    ↑↓ navigate  Enter=open  Esc=close",
+                id="dash-header",
+            )
+            with Horizontal(id="dash-main"):
+                with Vertical(id="dash-left"):
+                    yield Label("Available Scripts", classes="panel-label")
+                    yield ListView(id="script-list")
+                with Vertical(id="dash-right"):
+                    yield Label("Details", classes="panel-label")
+                    yield Static("", id="dash-detail")
+
+    def on_mount(self) -> None:
+        lv = self.query_one("#script-list", ListView)
+
+        # Quick actions section
+        if self.quick_actions:
+            lv.append(ListItem(Static(" ── Quick Actions ──", classes="cat-header")))
+            self._entries.append(None)
+            for label, cmd_key in self.quick_actions:
+                lv.append(ListItem(Static(f"  ⚡ {label}")))
+                self._entries.append({"type": "quick", "cmd": cmd_key, "label": label})
+
+        # Catalog scripts grouped by category
+        categories: Dict[str, List[tuple]] = {}
+        for idx, script in enumerate(self.catalog):
+            cat = str(script.get("category") or "General")
+            categories.setdefault(cat, []).append((idx, script))
+
+        for cat, scripts in categories.items():
+            lv.append(ListItem(Static(f" ── {cat} ──", classes="cat-header")))
+            self._entries.append(None)
+            for catalog_idx, script in scripts:
+                name = script.get("name", "?")
+                risk = script.get("risk_level", "")
+                dur = script.get("estimated_duration", "")
+                badge = f"  [dim]{risk}  {dur}[/dim]" if (risk or dur) else ""
+                lv.append(ListItem(Static(f"  {name}{badge}")))
+                self._entries.append({"type": "script", "catalog_idx": catalog_idx})
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        lv = self.query_one("#script-list", ListView)
+        idx = lv.index
+        if idx is None or idx >= len(self._entries):
+            return
+        entry = self._entries[idx]
+        detail = self.query_one("#dash-detail", Static)
+        if entry is None:
+            detail.update("")
+            return
+        if entry["type"] == "quick":
+            detail.update(f"[bold]{entry['label']}[/bold]\n\n[dim]Quick action[/dim]")
+            return
+        script = self.catalog[entry["catalog_idx"]]
+        name = script.get("name", "")
+        desc = script.get("description", "")
+        risk = script.get("risk_level", "-")
+        dur = script.get("estimated_duration", "-")
+        tags = ", ".join(script.get("tags") or [])
+        params = [
+            p for p in (script.get("params") or [])
+            if isinstance(p, dict) and not p.get("ui_only") and p.get("name")
+        ]
+        cmd_preview = str(script.get("cmd", ""))
+        detail.update(
+            f"[bold]{name}[/bold]\n\n"
+            f"{desc}\n\n"
+            f"[dim]Risk:[/dim] {risk}    [dim]Duration:[/dim] {dur}\n"
+            f"[dim]Tags:[/dim] {tags}\n"
+            f"[dim]Params:[/dim] {len(params)}    "
+            f"[dim]CMD:[/dim] ...{cmd_preview[-30:] if len(cmd_preview) > 30 else cmd_preview}"
+        )
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        lv = self.query_one("#script-list", ListView)
+        idx = lv.index
+        if idx is None or idx >= len(self._entries):
+            return
+        entry = self._entries[idx]
+        if entry is None:
+            return  # category header
+        if entry["type"] == "quick":
+            self.dismiss({"type": "quick", "cmd": entry["cmd"]})
+        elif entry["type"] == "script":
+            catalog_idx = entry["catalog_idx"]
+            script = self.catalog[catalog_idx]
+            initial = self.autofill_fn(script)
+
+            def _on_form(user_params: Optional[Dict]) -> None:
+                if user_params is not None:
+                    self.dismiss(
+                        {"type": "script", "catalog_idx": catalog_idx, "user_params": user_params}
+                    )
+
+            self.app.push_screen(ScriptFormScreen(script, initial), _on_form)
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss(None)
+
+
+class ScriptFormScreen(ModalScreen):
+    """Editable parameter form for a catalog script."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Cancel"),
+        Binding("f10", "run_script", "Run"),
+    ]
+
+    def __init__(self, script: Dict[str, Any], initial_values: Dict[str, Any]) -> None:
+        super().__init__()
+        self.script = script
+        self.initial_values = initial_values
+        self._params = [
+            p for p in (script.get("params") or [])
+            if isinstance(p, dict) and p.get("name") and not p.get("ui_only")
+        ]
+
+    def compose(self) -> ComposeResult:
+        name = self.script.get("name", "Script")
+        desc = self.script.get("description", "")
+        risk = self.script.get("risk_level", "-")
+        dur = self.script.get("estimated_duration", "-")
+
+        with Vertical(id="form-box"):
+            yield Static(f" {name}", id="form-title")
+            yield Static(f" {desc}", id="form-desc")
+            yield Static(f" Risk: {risk}   Duration: {dur}   F10=Run", id="form-badges")
+            yield Static("", id="form-divider")
+            with VerticalScroll(id="form-params"):
+                for param in self._params:
+                    pname = str(param.get("name", ""))
+                    label = str(param.get("label") or pname)
+                    help_text = str(param.get("help", ""))
+                    ptype = str(param.get("type", "string"))
+                    value = self.initial_values.get(pname, param.get("default"))
+                    widget_id = "param__" + pname.replace("-", "_").replace(".", "_")
+
+                    yield Label(label, classes="param-label")
+                    if ptype == "bool":
+                        yield Switch(value=bool(value), id=widget_id, classes="param-widget")
+                    elif ptype == "select":
+                        options = param.get("options") or []
+                        sel_opts = [(o, o) for o in options]
+                        sel_val = str(value) if value is not None else (options[0] if options else Select.BLANK)
+                        yield Select(sel_opts, value=sel_val, id=widget_id, classes="param-widget")
+                    else:
+                        yield Input(
+                            value=str(value) if value is not None else "",
+                            placeholder=help_text or label,
+                            id=widget_id,
+                            classes="param-widget",
+                        )
+                    if help_text:
+                        yield Static(f" {help_text}", classes="param-help")
+            with Horizontal(id="form-buttons"):
+                yield Button("▶  Start Script [F10]", id="btn-start", variant="success")
+                yield Button("Cancel [Esc]", id="btn-form-cancel", variant="error")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-start":
+            self.dismiss(self._collect_values())
+        elif event.button.id == "btn-form-cancel":
+            self.dismiss(None)
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss(None)
+
+    def action_run_script(self) -> None:
+        self.dismiss(self._collect_values())
+
+    def _collect_values(self) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        for param in self._params:
+            pname = str(param.get("name", ""))
+            ptype = str(param.get("type", "string"))
+            widget_id = "#param__" + pname.replace("-", "_").replace(".", "_")
+            try:
+                if ptype == "bool":
+                    result[pname] = self.query_one(widget_id, Switch).value
+                elif ptype == "select":
+                    v = self.query_one(widget_id, Select).value
+                    result[pname] = "" if v is Select.BLANK else v
+                else:
+                    result[pname] = self.query_one(widget_id, Input).value
+            except Exception:
+                result[pname] = param.get("default", "")
+        return result
 
 
 # ==================== Main App ====================
@@ -834,17 +1149,131 @@ class PCloudCommander(App):
         d = node.data
         return d.get("name"), d.get("id"), d.get("is_folder", False)
 
-    def action_launch(self) -> None:
-        actions = []
-
-        local_sel = None
+    def _autofill_params(self, script: Dict[str, Any]) -> Dict[str, Any]:
+        """Pre-fill param values from autofill context + YAML defaults."""
+        local_sel: Optional[str] = None
         if self.active_pane == "left":
-            tree = self.query_one(RobustDirectoryTree)
-            if tree.cursor_node and tree.cursor_node.data:
-                local_sel = str(tree.cursor_node.data.path)
+            try:
+                lt = self.query_one(RobustDirectoryTree)
+                if lt.cursor_node and lt.cursor_node.data:
+                    local_sel = str(lt.cursor_node.data.path)
+            except Exception:
+                pass
+        pcloud_folderid, pcloud_path = self._current_pcloud_target()
+
+        result: Dict[str, Any] = {}
+        for param in (script.get("params") or []):
+            if not isinstance(param, dict) or param.get("ui_only"):
+                continue
+            pname = str(param.get("name", "")).strip()
+            if not pname:
+                continue
+            ptype = str(param.get("type", "string"))
+            value = param.get("default")
+            lname = pname.lower()
+
+            if ptype in {"path", "string"}:
+                if any(k in lname for k in ["local", "source", "src"]) and local_sel:
+                    value = local_sel
+                elif lname in {"src", "source", "local_path", "local-path"} and not value:
+                    value = local_sel or self.local_root
+            if ptype in {"path", "string", "int"}:
+                if any(k in lname for k in ["folderid", "dst-id", "dst_id", "remote_id"]):
+                    value = pcloud_folderid
+                elif any(k in lname for k in ["remote_path", "pcloud_path", "dst_path", "target_path", "destination"]) and not value:
+                    value = pcloud_path
+
+            result[pname] = value
+        return result
+
+    def _build_command_from_user_params(
+        self, script: Dict[str, Any], user_params: Dict[str, Any]
+    ) -> List[str]:
+        """Build CLI command from script definition + user-edited param values."""
+        def flag_for(name: str) -> str:
+            return f"--{name.replace('_', '-')}"
+
+        cmd = [str(script.get("cmd"))] + [str(a) for a in script.get("args", [])]
+        for param in (script.get("params") or []):
+            if not isinstance(param, dict) or param.get("ui_only"):
+                continue
+            pname = str(param.get("name", "")).strip()
+            if not pname:
+                continue
+            ptype = str(param.get("type", "string"))
+            arg_mode = str(param.get("arg_mode", "flag"))
+            value = user_params.get(pname, param.get("default"))
+
+            if ptype == "bool":
+                if bool(value):
+                    cmd.append(flag_for(pname))
+                continue
+            if value in (None, ""):
+                continue
+            if arg_mode == "positional":
+                cmd.append(str(value))
+            else:
+                cmd.extend([flag_for(pname), str(value)])
+        return cmd
+
+    def _handle_quick_action(self, cmd_key: str, local_sel: Optional[str]) -> None:
+        if cmd_key == "refresh":
+            self.refresh_list()
+        elif cmd_key == "download":
+            self.action_download()
+        elif cmd_key.startswith("upload_file:"):
+            _, local_path, fid = cmd_key.split(":", 2)
+            self._run_tool("pcloud_simple_upload.py", [local_path, fid])
+        elif cmd_key.startswith("sync_dir:"):
+            _, local_path, fid = cmd_key.split(":", 2)
+            self._run_tool("pcloud_quick_delta.py", ["--src", local_path, "--dst-id", fid])
+
+    def _run_catalog_script_with_params(
+        self, script: Dict[str, Any], user_params: Dict[str, Any]
+    ) -> None:
+        script_name = str(script.get("name", "Unnamed Script"))
+        cwd = str(script.get("cwd") or ".")
+        try:
+            cmd = self._build_command_from_user_params(script, user_params)
+        except Exception as e:
+            self.notify(f"Cannot build command for {script_name}: {e}", severity="error")
+            return
+
+        env = os.environ.copy()
+        env_file = script.get("env_file")
+        if env_file:
+            env_path = Path(cwd) / str(env_file)
+            env_vars = self._load_env_file_vars(env_path)
+            for key in ("PATH", "PYTHONPATH"):
+                if key in env_vars:
+                    env_vars[key] = f"{env_vars[key]}:{env.get(key, '')}"
+            env.update(env_vars)
+        inline_env = script.get("env", {}) or {}
+        if isinstance(inline_env, dict):
+            for key in ("PATH", "PYTHONPATH"):
+                if key in inline_env:
+                    inline_env[key] = f"{inline_env[key]}:{env.get(key, '')}"
+            env.update({str(k): str(v) for k, v in inline_env.items()})
+
+        def run_in_suspend():
+            with self.suspend():
+                print(f"\n>>> Running: {script_name}\n")
+                print(f">>> CWD: {cwd}\n")
+                print(f">>> CMD: {' '.join(cmd)}\n")
+                subprocess.run(cmd, cwd=cwd, env=env)
+                input("\nPress Enter to return to Commander...")
+            self.refresh_list()
+
+        run_in_suspend()
+
+    def action_launch(self) -> None:
+        local_sel: Optional[str] = None
+        if self.active_pane == "left":
+            lt = self.query_one(RobustDirectoryTree)
+            if lt.cursor_node and lt.cursor_node.data:
+                local_sel = str(lt.cursor_node.data.path)
 
         pcloud_name, pcloud_id, pcloud_is_folder = self._get_selected_row()
-
         target_folderid = 0
         tree = self.query_one("#pcloud-tree", Tree)
         if tree.cursor_node and tree.cursor_node.data:
@@ -853,62 +1282,45 @@ class PCloudCommander(App):
             elif tree.cursor_node.parent and tree.cursor_node.parent.data:
                 target_folderid = tree.cursor_node.parent.data.get("id", 0)
 
-        actions.append(("Refresh pCloud List", "refresh"))
-
+        quick_actions: List[tuple] = [("Refresh pCloud List", "refresh")]
         if local_sel:
             path_obj = Path(local_sel)
             if path_obj.is_file():
-                actions.append((f"Upload to pCloud: {path_obj.name}", f"upload_file:{local_sel}:{target_folderid}"))
+                quick_actions.append((f"Upload: {path_obj.name}", f"upload_file:{local_sel}:{target_folderid}"))
             elif path_obj.is_dir():
-                actions.append((f"Sync Folder to pCloud: {path_obj.name}", f"sync_dir:{local_sel}:{target_folderid}"))
-
+                quick_actions.append((f"Sync Folder: {path_obj.name}", f"sync_dir:{local_sel}:{target_folderid}"))
         if pcloud_name and not pcloud_is_folder:
-            actions.append((f"Download from pCloud: {pcloud_name}", "download"))
+            quick_actions.append((f"Download: {pcloud_name}", "download"))
 
-        pcloud_target_id, pcloud_target_path = self._current_pcloud_target()
-
-        if self.script_catalog:
-            for idx, script in enumerate(self.script_catalog):
-                script_name = script.get("name") or f"Script {idx + 1}"
-                label = f"Run Script: {script_name}"
-                actions.append((label, f"yaml_script:{idx}"))
-        else:
+        # No catalog: fall back to simple quick-action menu
+        if not self.script_catalog:
             detail = self.script_catalog_error or "no catalog"
-            actions.append((f"(No scripts catalog: {detail[:36]})", "noop"))
+            self.notify(f"No scripts catalog: {detail}", severity="warning", timeout=6)
+            def _on_quick(cmd_key: Optional[str]) -> None:
+                if cmd_key:
+                    self._handle_quick_action(cmd_key, local_sel)
+            self.push_screen(ActionMenu([(label, cmd) for label, cmd in quick_actions]), _on_quick)
+            return
 
-        def _on_action(cmd_key: Optional[str]) -> None:
-            if not cmd_key:
+        def _on_dashboard(result: Optional[Dict]) -> None:
+            if not result:
                 return
-            if cmd_key == "refresh":
-                self.refresh_list()
-            elif cmd_key == "download":
-                self.action_download()
-            elif cmd_key == "noop":
-                self.notify(
-                    f"No external scripts catalog available: {self.script_catalog_error or 'unknown reason'}",
-                    severity="warning",
-                    timeout=8,
-                )
-            elif cmd_key.startswith("upload_file:"):
-                _, local_path, fid = cmd_key.split(":", 2)
-                self._run_tool("pcloud_simple_upload.py", [local_path, fid])
-            elif cmd_key.startswith("sync_dir:"):
-                _, local_path, fid = cmd_key.split(":", 2)
-                self._run_tool("pcloud_quick_delta.py", ["--src", local_path, "--dst-id", fid])
-            elif cmd_key.startswith("yaml_script:"):
-                _, idx_text = cmd_key.split(":", 1)
-                idx = int(idx_text)
-                if 0 <= idx < len(self.script_catalog):
-                    self._run_catalog_script(
-                        self.script_catalog[idx],
-                        local_sel=local_sel,
-                        pcloud_folderid=pcloud_target_id,
-                        pcloud_path=pcloud_target_path,
-                    )
-                else:
-                    self.notify("Invalid script selection.", severity="error")
+            if result["type"] == "quick":
+                self._handle_quick_action(result["cmd"], local_sel)
+            elif result["type"] == "script":
+                catalog_idx = result["catalog_idx"]
+                user_params = result["user_params"]
+                if 0 <= catalog_idx < len(self.script_catalog):
+                    self._run_catalog_script_with_params(self.script_catalog[catalog_idx], user_params)
 
-        self.push_screen(ActionMenu(actions), _on_action)
+        self.push_screen(
+            ScriptDashboardScreen(
+                catalog=self.script_catalog,
+                quick_actions=quick_actions,
+                autofill_fn=self._autofill_params,
+            ),
+            _on_dashboard,
+        )
 
     def _run_tool(self, script_name: str, args: List[str]):
         script_path = os.path.join(os.path.dirname(pc_path), script_name)
