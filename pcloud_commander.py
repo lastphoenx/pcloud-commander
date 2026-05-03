@@ -83,6 +83,35 @@ from textual.widgets import Button
 
 DEFAULT_DOWNLOAD_DIR = "/srv/nas/restore"
 
+
+class RobustDirectoryTree(DirectoryTree):
+    """DirectoryTree that follows symlinks and never silently skips paths.
+
+    Textual's stock DirectoryTree stops expanding a node if any os.scandir()
+    call raises PermissionError or OSError (e.g. broken NFS/CIFS mounts,
+    symlink loops).  This subclass swallows those errors per-entry so
+    other siblings are still shown.
+    """
+
+    def filter_paths(self, paths):
+        """Accept every path — no hidden-file filtering."""
+        return paths
+
+    def _get_entries(self, location):
+        """Yield DirEntry-like paths, following symlinks, skipping unreadable."""
+        try:
+            entries = sorted(location.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        except OSError:
+            return
+        for entry in entries:
+            try:
+                # resolve symlinks so is_dir() follows them
+                entry.stat()
+                yield entry
+            except OSError:
+                continue
+
+
 # ==================== Theme System ====================
 
 @dataclass
@@ -114,15 +143,25 @@ class Palette:
 
 
 PALETTES: dict[str, Palette] = {
-    # ── Posting-like: calm teal on near-black ──────────────────────────────
+    # ── Posting v2: exact Posting app aesthetic (dark navy, violet accents, teal cursor)
     "posting": Palette(
         name="posting",
-        bg="#0d0d0d", surface="#0d0d0d", panel="#1a1a1a", overlay="#111111",
-        border="#2d2d2d", border_active="#00b5cc",
-        text="#d0d0d0", text_muted="#666666", text_dim="#3a3a3a",
-        accent="#f1c40f", accent_fg="#000000", accent_dim="#a88900",
-        folder="#9d84c7", file="#7ec8a0",
-        success="#27ae60", error="#c0392b",
+        bg="#0f111a",       # deep dark navy — matches Posting background
+        surface="#0f111a",
+        panel="#1a1b2e",   # slightly lifted for headers/footer
+        overlay="#141626", # modal dialogs
+        border="#2a2c40",  # subtle pane borders
+        border_active="#7c6af7",  # violet/purple — matches Posting tabs + active elements
+        text="#c5c8d8",    # main readable text (not harsh white)
+        text_muted="#555873",  # inactive labels
+        text_dim="#30334a",    # guide lines
+        accent="#1a6b7c",      # teal cursor bg — like Posting selected row
+        accent_fg="#e0f4f8",   # text on teal cursor
+        accent_dim="#0d3d47",  # unfocused cursor
+        folder="#7c6af7",  # violet folders — matches Posting tree bullets
+        file="#c5c8d8",    # files same as normal text
+        success="#26a96c", # green — matches Posting Send button
+        error="#c0392b",
     ),
     # ── Hacker: terminal green on black ────────────────────────────────────
     "hacker": Palette(
@@ -213,6 +252,12 @@ def build_css(p: Palette) -> str:
     #pcloud-tree .tree--highlight {{
         background: {p.accent_dim};
         color: {p.accent_fg};
+    }}
+    /* Hover: mouse-over row — same rule for BOTH panes */
+    DirectoryTree .tree--hover,
+    #pcloud-tree .tree--hover {{
+        background: {p.panel};
+        color: {p.text};
     }}
 
     /* ── Path bar ─────────────────────────────────────────────────── */
@@ -387,7 +432,7 @@ class PCloudCommander(App):
         yield Horizontal(
             Vertical(
                 Label(f"📁 Local: {self.local_root}", classes="panel-label"),
-                DirectoryTree(self.local_root),
+                RobustDirectoryTree(self.local_root, show_hidden=True),
                 id="left-pane",
             ),
             Vertical(
@@ -455,7 +500,7 @@ class PCloudCommander(App):
         if self.active_pane == "left":
             left.add_class("active-pane")
             right.remove_class("active-pane")
-            self.query_one(DirectoryTree).focus()
+            self.query_one(RobustDirectoryTree).focus()
         else:
             right.add_class("active-pane")
             left.remove_class("active-pane")
@@ -493,7 +538,7 @@ class PCloudCommander(App):
                 p_str = self._node_path_str(node)
                 self.query_one("#path-bar", Static).update(f"pCloud: {p_str}")
                 self.query_one("#pcloud-label", Label).update(f"☁  pCloud: {p_str}")
-        elif isinstance(event.control, DirectoryTree):
+        elif isinstance(event.control, RobustDirectoryTree):
             if event.node and event.node.data:
                 # Robust path detection for local files
                 p_obj = getattr(event.node.data, "path", event.node.data)
@@ -531,7 +576,7 @@ class PCloudCommander(App):
         # Lokale Datei ausgewählt?
         local_sel = None
         if self.active_pane == "left":
-            tree = self.query_one(DirectoryTree)
+            tree = self.query_one(RobustDirectoryTree)
             if tree.cursor_node and tree.cursor_node.data:
                 local_sel = str(tree.cursor_node.data.path)
         
