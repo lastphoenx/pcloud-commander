@@ -91,7 +91,6 @@ from textual.theme import Theme
 from textual.widgets import (
     Header, Footer, Static, DirectoryTree, Label, Tree,
     OptionList, Button, Input, Select, ListView, ListItem,
-    RadioSet, RadioButton,
 )
 from textual.widgets.option_list import Option
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
@@ -516,24 +515,35 @@ CUSTOM_CSS = """
     }
 
     /* ── Bool Toggle ─────────────────────────────────────────────── */
-    .bool-set {
+    /* ── Bool Toggle (zwei nebeneinander) ───────────────────────── */
+    .bool-row {
         height: 3;
         width: 1fr;
-        background: $surface;
-        border: none;
     }
     .bool-yes, .bool-no {
         height: 3;
-        padding: 0 3;
         width: auto;
+        min-width: 12;
+        margin-right: 1;
     }
-    /* ausgewählt: voller farbiger Hintergrund wie Start Script / Cancel */
-    .bool-yes.-on {
+    /* Standard (nicht ausgewählt): gedimmt */
+    .bool-yes {
+        background: $panel;
+        color: $text-muted;
+    }
+    .bool-no {
+        background: $panel;
+        color: $text-muted;
+    }
+    /* Ausgewählt: voll farbig */
+    .bool-yes.active {
         background: $success;
+        color: $accent-fg;
         text-style: bold;
     }
-    .bool-no.-on {
+    .bool-no.active {
         background: $error;
+        color: $accent-fg;
         text-style: bold;
     }
 
@@ -979,6 +989,11 @@ class ScriptFormScreen(ModalScreen):
         self._params = [
             p for p in (script.get("params") or [])
             if isinstance(p, dict) and p.get("name") and not p.get("ui_only")
+                # Toggle-Zustand für bool-Parameter: pname -> True/False
+                self._bool_state: Dict[str, bool] = {
+                    str(p.get("name", "")): bool(initial_values.get(str(p.get("name", "")), p.get("default", False)))
+                    for p in self._params if str(p.get("type", "")) == "bool"
+                }
         ]
 
     @staticmethod
@@ -1017,10 +1032,14 @@ class ScriptFormScreen(ModalScreen):
 
                     yield Label(label, classes="param-label")
                     if ptype == "bool":
-                        default_on = bool(value)
-                        with RadioSet(id=widget_id, classes="bool-set"):
-                            yield RadioButton("✓  Ja", value=default_on, classes="bool-yes")
-                            yield RadioButton("✗  Nein", value=not default_on, classes="bool-no")
+                        yes_id = "boolyes__" + pname.replace("-", "_").replace(".", "_")
+                        no_id  = "boolno__"  + pname.replace("-", "_").replace(".", "_")
+                        default_on = self._bool_state.get(pname, False)
+                        with Horizontal(classes="bool-row"):
+                            yield Button("✓  Ja", id=yes_id,
+                                         classes="bool-yes" + (" active" if default_on else ""))
+                            yield Button("✗  Nein", id=no_id,
+                                         classes="bool-no" + (" active" if not default_on else ""))
                     elif ptype == "select":
                         options = param.get("options") or []
                         sel_opts = [(o, o) for o in options]
@@ -1065,6 +1084,28 @@ class ScriptFormScreen(ModalScreen):
         if btn_id == "btn-start":
             self.dismiss(self._collect_values())
         elif btn_id == "btn-form-cancel":
+                    elif btn_id.startswith("boolyes__") or btn_id.startswith("boolno__"):
+                        event.stop()
+                        is_yes = btn_id.startswith("boolyes__")
+                        pname_clean = btn_id[len("boolyes__"):] if is_yes else btn_id[len("boolno__"):]
+                        pname_orig = pname_clean
+                        for p in self._params:
+                            pn = str(p.get("name", ""))
+                            if pn.replace("-", "_").replace(".", "_") == pname_clean:
+                                pname_orig = pn
+                                break
+                        self._bool_state[pname_orig] = is_yes
+                        yes_wid = "#boolyes__" + pname_clean
+                        no_wid  = "#boolno__"  + pname_clean
+                        try:
+                            yes_btn = self.query_one(yes_wid, Button)
+                            no_btn  = self.query_one(no_wid,  Button)
+                            if is_yes:
+                                yes_btn.add_class("active"); no_btn.remove_class("active")
+                            else:
+                                no_btn.add_class("active");  yes_btn.remove_class("active")
+                        except Exception:
+                            pass
             self.dismiss(None)
         elif btn_id.startswith("browse__"):
             pname_clean = btn_id[len("browse__"):]
@@ -1111,8 +1152,7 @@ class ScriptFormScreen(ModalScreen):
             widget_id = "#param__" + pname.replace("-", "_").replace(".", "_")
             try:
                 if ptype == "bool":
-                    rs = self.query_one(widget_id, RadioSet)
-                    result[pname] = (rs.pressed_index == 0)  # 0=Ja, 1=Nein
+                    result[pname] = self._bool_state.get(pname, bool(param.get("default", False)))
                 elif ptype == "select":
                     v = self.query_one(widget_id, Select).value
                     result[pname] = "" if v is Select.BLANK else v
