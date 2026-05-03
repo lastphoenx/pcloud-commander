@@ -538,12 +538,12 @@ CUSTOM_CSS = """
     /* Ausgewählt: voll farbig */
     .bool-yes.active {
         background: $success;
-        color: $accent-fg;
+        color: $foreground;
         text-style: bold;
     }
     .bool-no.active {
         background: $error;
-        color: $accent-fg;
+        color: $foreground;
         text-style: bold;
     }
 
