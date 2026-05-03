@@ -989,12 +989,15 @@ class ScriptFormScreen(ModalScreen):
         self._params = [
             p for p in (script.get("params") or [])
             if isinstance(p, dict) and p.get("name") and not p.get("ui_only")
-                # Toggle-Zustand für bool-Parameter: pname -> True/False
-                self._bool_state: Dict[str, bool] = {
-                    str(p.get("name", "")): bool(initial_values.get(str(p.get("name", "")), p.get("default", False)))
-                    for p in self._params if str(p.get("type", "")) == "bool"
-                }
         ]
+        # Toggle-Zustand für bool-Parameter: pname -> True/False
+        self._bool_state: Dict[str, bool] = {
+            str(p.get("name", "")): bool(
+                initial_values.get(str(p.get("name", "")), p.get("default", False))
+            )
+            for p in self._params
+            if str(p.get("type", "")) == "bool"
+        }
 
     @staticmethod
     def _is_pcloud_param(param: dict) -> bool:
