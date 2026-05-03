@@ -1512,6 +1512,9 @@ class PCloudCommander(App):
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         if event.control.id == "pcloud-tree":
+            if self.active_pane != "right":
+                self.active_pane = "right"
+                self._apply_pane_focus()
             node = event.node
             if node and node.data and isinstance(node.data, dict):
                 p_str = self._node_path_str(node)
@@ -1524,6 +1527,9 @@ class PCloudCommander(App):
                     mtime = self._format_mtime(node.data.get("mtime", ""))
                     self._set_status_detail(f"pCloud file: {size} | mtime: {mtime or '-'}")
         elif isinstance(event.control, RobustDirectoryTree):
+            if self.active_pane != "left":
+                self.active_pane = "left"
+                self._apply_pane_focus()
             if event.node and event.node.data:
                 p_obj = getattr(event.node.data, "path", event.node.data)
                 self.query_one("#path-bar", Static).update(f"Local: {p_obj}")
@@ -1537,12 +1543,21 @@ class PCloudCommander(App):
                     self._set_status_detail("")
 
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
+        if self.active_pane != "left":
+            self.active_pane = "left"
+            self._apply_pane_focus()
         self.notify(f"📄 {event.path.name}  │  a=actions", severity="information")
 
     def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
+        if self.active_pane != "left":
+            self.active_pane = "left"
+            self._apply_pane_focus()
         self.query_one("#path-bar", Static).update(f"Local: {event.path}")
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        if event.control.id == "pcloud-tree" and self.active_pane != "right":
+            self.active_pane = "right"
+            self._apply_pane_focus()
         node = event.node
         if node.data and not node.data.get("is_folder"):
             name = node.data.get("name", "")
