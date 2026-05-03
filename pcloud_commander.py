@@ -4,6 +4,11 @@
 pCloud Commander - Interactive TUI File Browser
 ================================================
 Based on pcloud_bin_lib.py and Textual.
+
+Theme-System: Uses Textual's native register_theme() API so that
+all built-in widgets (Tree cursor, Header, Footer, OptionList, …)
+pick up the palette automatically.  Custom CSS is minimal — only
+for our own widgets (#path-bar, .panel-label, modals).
 """
 
 import os
@@ -25,15 +30,15 @@ def load_pcloud_lib(lib_path: Optional[str] = None):
     search_paths = []
     if lib_path:
         search_paths.append(lib_path)
-    
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
     search_paths.extend([
         os.path.join(script_dir, "pcloud_bin_lib.py"),
-        os.path.join(script_dir, "..", "pcloud-tools", "main", "pcloud_bin_lib.py"), # Server structure
-        os.path.join(script_dir, "..", "pcloud-tools", "pcloud_bin_lib.py"),        # Local structure
+        os.path.join(script_dir, "..", "pcloud-tools", "main", "pcloud_bin_lib.py"),
+        os.path.join(script_dir, "..", "pcloud-tools", "pcloud_bin_lib.py"),
         "/opt/apps/pcloud-tools/main/pcloud_bin_lib.py",
     ])
-    
+
     for path in search_paths:
         path = os.path.abspath(os.path.expanduser(path))
         if os.path.exists(path):
@@ -47,11 +52,12 @@ def load_pcloud_lib(lib_path: Optional[str] = None):
                 continue
     return None, None
 
+
 def find_env_file(env_path: Optional[str] = None):
     """Sucht die .env Datei der pcloud-tools."""
     if env_path and os.path.exists(env_path):
         return env_path
-    
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         os.path.join(script_dir, ".env"),
@@ -64,6 +70,7 @@ def find_env_file(env_path: Optional[str] = None):
             return cand
     return None
 
+
 # Initialisiere Library
 pc, pc_path = load_pcloud_lib()
 if not pc:
@@ -73,39 +80,32 @@ if not pc:
 # ==================== Textual UI ====================
 
 from textual.app import App, ComposeResult
+from textual.theme import Theme
 from textual.widgets import Header, Footer, Static, DirectoryTree, Label, Tree, OptionList
 from textual.widgets.option_list import Option
 from textual.containers import Container, Horizontal, Vertical
 from textual.binding import Binding
 from textual.screen import ModalScreen
 from textual.widgets import Button
+from rich.text import Text
 
 
 DEFAULT_DOWNLOAD_DIR = "/srv/nas/restore"
 
 
 class RobustDirectoryTree(DirectoryTree):
-    """DirectoryTree that follows symlinks and never silently skips paths.
-
-    Textual's stock DirectoryTree stops expanding a node if any os.scandir()
-    call raises PermissionError or OSError (e.g. broken NFS/CIFS mounts,
-    symlink loops).  This subclass swallows those errors per-entry so
-    other siblings are still shown.
-    """
+    """DirectoryTree that follows symlinks and never silently skips paths."""
 
     def filter_paths(self, paths):
-        """Accept every path — no hidden-file filtering."""
         return paths
 
     def _get_entries(self, location):
-        """Yield DirEntry-like paths, following symlinks, skipping unreadable."""
         try:
             entries = sorted(location.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
         except OSError:
             return
         for entry in entries:
             try:
-                # resolve symlinks so is_dir() follows them
                 entry.stat()
                 yield entry
             except OSError:
@@ -116,96 +116,161 @@ class RobustDirectoryTree(DirectoryTree):
 
 @dataclass
 class Palette:
-    """Central color palette. All CSS is derived from these tokens."""
+    """Central color palette.  Feeds Textual's Theme + our minimal custom CSS."""
     name: str
-    # Backgrounds
-    bg: str           # screen background
-    surface: str      # pane / widget background (same as bg or slightly lighter)
-    panel: str        # header/footer/label strips
-    overlay: str      # modal dialog background
-    # Borders
-    border: str       # inactive pane border
-    border_active: str  # active pane + modal border (accent color)
-    # Text
-    text: str         # primary readable text
-    text_muted: str   # inactive labels, hints
-    text_dim: str     # guides, status bar, very dimmed
-    # Cursor / selection
-    accent: str       # cursor/selection background (focused)
-    accent_fg: str    # text ON accent background
-    accent_dim: str   # cursor background when tree is NOT focused
-    # Semantic item colors
-    folder: str       # folder nodes
-    file: str         # file nodes
-    # Button semantics
-    success: str      # Run / Yes button background
-    error: str        # Cancel / No / Delete button background
+    # Core semantic colors (→ Theme fields)
+    primary: str          # accent/highlight color (borders, active elements)
+    secondary: str        # secondary accent
+    accent: str           # cursor / selection accent
+    background: str       # screen background
+    surface: str          # widget background
+    panel: str            # header/footer/label strips
+    foreground: str       # primary text
+    error: str
+    success: str
+    # Extended tokens (→ Theme.variables + custom CSS)
+    text_muted: str       # inactive labels
+    text_dim: str         # guide lines, status bar
+    accent_fg: str        # text ON accent/cursor background
+    accent_dim: str       # cursor when tree NOT focused
+    border: str           # inactive pane border
+    overlay: str          # modal background
+    folder: str           # folder name color
+    file: str             # file name color
 
 
 PALETTES: dict[str, Palette] = {
-    # ── Posting v2: exact Posting app aesthetic (dark navy, violet accents, teal cursor)
+    # ── Posting: dark navy, violet accents, teal cursor ──────────
     "posting": Palette(
         name="posting",
-        bg="#0f111a",       # deep dark navy — matches Posting background
+        primary="#7c6af7",
+        secondary="#1a6b7c",
+        accent="#1a6b7c",
+        background="#0f111a",
         surface="#0f111a",
-        panel="#1a1b2e",   # slightly lifted for headers/footer
-        overlay="#141626", # modal dialogs
-        border="#2a2c40",  # subtle pane borders
-        border_active="#7c6af7",  # violet/purple — matches Posting tabs + active elements
-        text="#c5c8d8",    # main readable text (not harsh white)
-        text_muted="#555873",  # inactive labels
-        text_dim="#30334a",    # guide lines
-        accent="#1a6b7c",      # teal cursor bg — like Posting selected row
-        accent_fg="#e0f4f8",   # text on teal cursor
-        accent_dim="#0d3d47",  # unfocused cursor
-        folder="#7c6af7",  # violet folders — matches Posting tree bullets
-        file="#c5c8d8",    # files same as normal text
-        success="#26a96c", # green — matches Posting Send button
+        panel="#1a1b2e",
+        foreground="#c5c8d8",
         error="#c0392b",
+        success="#26a96c",
+        text_muted="#555873",
+        text_dim="#30334a",
+        accent_fg="#e0f4f8",
+        accent_dim="#0d3d47",
+        border="#2a2c40",
+        overlay="#141626",
+        folder="#7c6af7",
+        file="#c5c8d8",
     ),
-    # ── Hacker: terminal green on black ────────────────────────────────────
+    # ── Hacker: terminal green on black ──────────────────────────
     "hacker": Palette(
         name="hacker",
-        bg="#000000", surface="#000000", panel="#0a0a0a", overlay="#050505",
-        border="#1a3a1a", border_active="#00ff41",
-        text="#00cc33", text_muted="#006614", text_dim="#003308",
-        accent="#00ff41", accent_fg="#000000", accent_dim="#00aa2b",
-        folder="#00cc33", file="#009922",
-        success="#00ff41", error="#ff0000",
+        primary="#00ff41",
+        secondary="#00cc33",
+        accent="#00ff41",
+        background="#000000",
+        surface="#000000",
+        panel="#0a0a0a",
+        foreground="#00cc33",
+        error="#ff0000",
+        success="#00ff41",
+        text_muted="#006614",
+        text_dim="#003308",
+        accent_fg="#000000",
+        accent_dim="#00aa2b",
+        border="#1a3a1a",
+        overlay="#050505",
+        folder="#00cc33",
+        file="#009922",
     ),
-    # ── Calm: muted blue-grey ──────────────────────────────────────────────
+    # ── Calm: muted blue-grey ────────────────────────────────────
     "calm": Palette(
         name="calm",
-        bg="#1c1e26", surface="#232530", panel="#2a2c3a", overlay="#1c1e26",
-        border="#3a3c4e", border_active="#6c91bf",
-        text="#a8aebb", text_muted="#5c6270", text_dim="#3a3c4e",
-        accent="#6c91bf", accent_fg="#1c1e26", accent_dim="#3d5a80",
-        folder="#b083ea", file="#59c6ab",
-        success="#3fc56b", error="#fc4b5f",
+        primary="#6c91bf",
+        secondary="#b083ea",
+        accent="#6c91bf",
+        background="#1c1e26",
+        surface="#232530",
+        panel="#2a2c3a",
+        foreground="#a8aebb",
+        error="#fc4b5f",
+        success="#3fc56b",
+        text_muted="#5c6270",
+        text_dim="#3a3c4e",
+        accent_fg="#1c1e26",
+        accent_dim="#3d5a80",
+        border="#3a3c4e",
+        overlay="#1c1e26",
+        folder="#b083ea",
+        file="#59c6ab",
     ),
 }
 
 DEFAULT_PALETTE = "posting"
 
 
-def build_css(p: Palette) -> str:
-    """Generate full app CSS from a single Palette — one source of truth."""
-    return f"""
-    /* ── Screen ─────────────────────────────────────────────────── */
-    Screen {{
-        background: {p.bg};
-        color: {p.text};
-    }}
+def build_theme(p: Palette) -> Theme:
+    """Create a Textual Theme from our Palette.
 
+    The `variables` dict lets us override the auto-generated CSS
+    variables for cursor, hover, scrollbar, etc.
+    """
+    return Theme(
+        name=p.name,
+        primary=p.primary,
+        secondary=p.secondary,
+        accent=p.accent,
+        background=p.background,
+        surface=p.surface,
+        panel=p.panel,
+        foreground=p.foreground,
+        error=p.error,
+        success=p.success,
+        dark=True,
+        luminosity_spread=0.15,
+        text_alpha=0.95,
+        variables={
+            # Cursor (focused)
+            "block-cursor-foreground": p.accent_fg,
+            "block-cursor-background": p.accent,
+            "block-cursor-text-style": "bold",
+            # Cursor (blurred / unfocused pane)
+            "block-cursor-blurred-foreground": p.accent_fg,
+            "block-cursor-blurred-background": p.accent_dim,
+            "block-cursor-blurred-text-style": "none",
+            # Hover
+            "block-hover-background": p.panel,
+            # Border
+            "border": p.border,
+            "border-blurred": p.border,
+            # Footer
+            "footer-background": p.panel,
+            "footer-foreground": p.foreground,
+            "footer-key-background": p.primary,
+            "footer-key-foreground": p.accent_fg,
+            # Scrollbar
+            "scrollbar": p.text_dim,
+            "scrollbar-background": p.surface,
+            "scrollbar-hover": p.text_muted,
+            "scrollbar-active": p.primary,
+        },
+    )
+
+
+def build_custom_css(p: Palette) -> str:
+    """Minimal CSS for OUR custom widgets only.
+
+    Everything that Textual's Theme system handles (Tree cursor, Header,
+    Footer, OptionList highlight, scrollbars, …) is NOT repeated here.
+    """
+    return f"""
     /* ── Panes ───────────────────────────────────────────────────── */
     #left-pane, #right-pane {{
         width: 1fr;
         height: 1fr;
         border: solid {p.border};
-        background: {p.surface};
     }}
     #left-pane.active-pane, #right-pane.active-pane {{
-        border: double {p.border_active};
+        border: double {p.primary};
     }}
 
     /* ── Panel labels (pane headers) ─────────────────────────────── */
@@ -217,54 +282,22 @@ def build_css(p: Palette) -> str:
         text-style: bold;
     }}
     .active-pane .panel-label {{
-        color: {p.border_active};
+        color: {p.primary};
     }}
 
-    /* ── Trees: local (DirectoryTree) AND pCloud (Tree) ──────────── */
-    /*   Both trees share the same rules — same look left and right.  */
-    DirectoryTree, #pcloud-tree {{
-        height: 1fr;
-        background: {p.surface};
-        color: {p.text};
-    }}
-    /* Guide lines */
-    DirectoryTree .tree--guides,
-    #pcloud-tree .tree--guides {{
-        color: {p.text_dim};
-    }}
-    /* Folder / file node colors (DirectoryTree-specific classes) */
+    /* ── Folder color in DirectoryTree ────────────────────────────── */
     DirectoryTree .directory-tree--folder {{
         color: {p.folder};
-        text-style: bold;
     }}
     DirectoryTree .directory-tree--file {{
         color: {p.file};
-    }}
-    /* Cursor: focused tree (same selector for both widget types) */
-    DirectoryTree .tree--cursor,
-    #pcloud-tree .tree--cursor {{
-        background: {p.accent};
-        color: {p.accent_fg};
-        text-style: bold;
-    }}
-    /* Cursor: unfocused tree — MUST be styled or Textual uses its default blue */
-    DirectoryTree .tree--highlight,
-    #pcloud-tree .tree--highlight {{
-        background: {p.accent_dim};
-        color: {p.accent_fg};
-    }}
-    /* Hover: mouse-over row — same rule for BOTH panes */
-    DirectoryTree .tree--hover,
-    #pcloud-tree .tree--hover {{
-        background: {p.panel};
-        color: {p.text};
     }}
 
     /* ── Path bar ─────────────────────────────────────────────────── */
     #path-bar {{
         height: 1;
         background: {p.panel};
-        color: {p.border_active};
+        color: {p.primary};
         padding: 0 1;
         text-style: bold;
     }}
@@ -277,7 +310,7 @@ def build_css(p: Palette) -> str:
         padding: 0 1;
     }}
 
-    /* ── Modals (ActionMenu + ConfirmModal) ───────────────────────── */
+    /* ── Modals ───────────────────────────────────────────────────── */
     ActionMenu, ConfirmModal {{
         align: center middle;
         background: rgba(0, 0, 0, 0.8);
@@ -285,27 +318,14 @@ def build_css(p: Palette) -> str:
     #menu-box, #confirm-box {{
         width: 60;
         height: auto;
-        border: double {p.border_active};
+        border: double {p.primary};
         background: {p.overlay};
         padding: 1 2;
     }}
     #menu-title, #confirm-msg {{
-        color: {p.text};
         text-align: center;
         text-style: bold;
         margin-bottom: 1;
-    }}
-
-    /* ── OptionList ───────────────────────────────────────────────── */
-    OptionList {{
-        background: {p.overlay};
-        color: {p.text};
-        border: solid {p.border};
-    }}
-    OptionList > .option-list--option-highlighted {{
-        background: {p.accent};
-        color: {p.accent_fg};
-        text-style: bold;
     }}
 
     /* ── Buttons ──────────────────────────────────────────────────── */
@@ -327,6 +347,9 @@ def build_css(p: Palette) -> str:
         color: #ffffff;
     }}
     """
+
+
+# ==================== Modal Screens ====================
 
 class ConfirmModal(ModalScreen):
     """Einfaches Ja/Nein-Popup."""
@@ -352,7 +375,6 @@ class ConfirmModal(ModalScreen):
             self.dismiss(True)
 
 
-
 class ActionMenu(ModalScreen):
     """Menü zur Auswahl von pcloud-tools Kommandos."""
 
@@ -371,11 +393,9 @@ class ActionMenu(ModalScreen):
                 yield Button("Cancel [Esc]", id="btn-cancel")
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        """Auswahl per Enter oder Klick auf Option."""
         self.dismiss(event.option.id)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Auswahl per Run-Button."""
         if event.button.id == "btn-run":
             option_list = self.query_one(OptionList)
             if option_list.highlighted is not None:
@@ -394,8 +414,12 @@ class ActionMenu(ModalScreen):
                 self.dismiss(option.id)
 
 
+# ==================== Main App ====================
+
 class PCloudCommander(App):
     """pCloud Commander TUI."""
+
+    _themes_registered = False
 
     TITLE = "pCloud Commander"
     SUB_TITLE = "Interactive Dual-Pane Browser"
@@ -411,9 +435,6 @@ class PCloudCommander(App):
         Binding("a", "launch", "Actions", show=True),
     ]
 
-    # CSS is set dynamically in __init__ via build_css(palette)
-    CSS = build_css(PALETTES[DEFAULT_PALETTE])
-
     def __init__(self, cfg_overrides=None, local_root: str = "/srv",
                  palette_name: str = DEFAULT_PALETTE):
         super().__init__()
@@ -422,9 +443,25 @@ class PCloudCommander(App):
         self.local_root = local_root if Path(local_root).exists() else "/"
         self.active_pane = "right"
         self.download_dir = DEFAULT_DOWNLOAD_DIR
-        # Apply selected palette
-        palette = PALETTES.get(palette_name, PALETTES[DEFAULT_PALETTE])
-        PCloudCommander.CSS = build_css(palette)
+        self._palette_name = palette_name
+        self.palette = PALETTES.get(palette_name, PALETTES[DEFAULT_PALETTE])
+
+        # Register themes only once even if the app is reinstantiated.
+        if not PCloudCommander._themes_registered:
+            for pal in PALETTES.values():
+                self.register_theme(build_theme(pal))
+            PCloudCommander._themes_registered = True
+
+        # Set custom CSS for our own widgets (pane borders, labels, modals)
+        self.CSS = build_custom_css(self.palette)
+
+    def on_mount(self) -> None:
+        # Activate the selected theme — this sets all $variables globally
+        self.theme = self._palette_name
+        self._apply_pane_focus()
+        self.call_after_refresh(self._init_pcloud_tree)
+
+    # ── Compose ──────────────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -437,26 +474,34 @@ class PCloudCommander(App):
             ),
             Vertical(
                 Label("☁  pCloud: /", classes="panel-label", id="pcloud-label"),
-                Tree("/", id="pcloud-tree"),
+                Tree(self._folder_label("/"), id="pcloud-tree"),
                 id="right-pane",
             ),
         )
         yield Static(f"Lib: {pc_path} | Env: {self.env_file}", id="status-bar")
         yield Footer()
 
-    def on_mount(self) -> None:
-        self._apply_pane_focus()
-        self.call_after_refresh(self._init_pcloud_tree)
+    # ── pCloud tree ──────────────────────────────────────────────
 
     def _init_pcloud_tree(self) -> None:
-        """Root-Ebene des pCloud-Baums laden."""
         tree = self.query_one("#pcloud-tree", Tree)
+        tree.root.set_label(self._folder_label("/"))
         tree.root.data = {"id": 0, "is_folder": True, "name": "", "loaded": False}
         self._load_tree_node(tree.root, 0)
         tree.root.expand()
 
+    def _folder_label(self, name: str) -> Text:
+        label = Text("📁 ", style=f"bold {self.palette.folder}")
+        label.append(name, style=f"bold {self.palette.folder}")
+        return label
+
+    def _file_label(self, name: str, size_str: str) -> Text:
+        label = Text("📄 ", style=self.palette.file)
+        label.append(name, style=self.palette.file)
+        label.append(f"  [{size_str}]", style=self.palette.text_muted)
+        return label
+
     def _load_tree_node(self, node, folderid: int) -> None:
-        """pCloud-Ordner-Inhalt lazy in einen Tree-Knoten laden."""
         try:
             res = pc.listfolder(self.cfg, folderid=folderid)
             if res.get("result") == 0:
@@ -464,15 +509,15 @@ class PCloudCommander(App):
                 for item in sorted(contents, key=lambda x: (not x["isfolder"], x["name"].lower())):
                     if item["isfolder"]:
                         child = node.add(
-                            f"📁 {item['name']}",
+                            self._folder_label(item["name"]),
                             data={"id": item["folderid"], "is_folder": True,
                                   "name": item["name"], "loaded": False},
                         )
-                        child.add_leaf("⋯", data=None)  # Platzhalter für expandierbaren Pfeil
+                        child.add_leaf("⋯", data=None)
                     else:
                         size_str = self._format_size(item["size"])
                         node.add_leaf(
-                            f"📄 {item['name']}  [{size_str}]",
+                            self._file_label(item["name"], size_str),
                             data={"id": item["fileid"], "is_folder": False,
                                   "name": item["name"], "size": item["size"],
                                   "mtime": item.get("modified", "")},
@@ -485,14 +530,15 @@ class PCloudCommander(App):
             node.data["loaded"] = True
 
     def _node_path_str(self, node) -> str:
-        """Baut den pCloud-Pfad-String aus der Node-Hierarchie."""
         parts = []
         n = node
-        while n and n.parent is not None:  # Root-Node hat parent=None
+        while n and n.parent is not None:
             if n.data and n.data.get("name"):
                 parts.append(n.data["name"])
             n = n.parent
         return "/" if not parts else "/" + "/".join(reversed(parts)) + "/"
+
+    # ── Pane focus ───────────────────────────────────────────────
 
     def _apply_pane_focus(self) -> None:
         left = self.query_one("#left-pane")
@@ -510,8 +556,9 @@ class PCloudCommander(App):
         self.active_pane = "left" if self.active_pane == "right" else "right"
         self._apply_pane_focus()
 
+    # ── Refresh ──────────────────────────────────────────────────
+
     def refresh_list(self):
-        """Baut den pCloud-Baum komplett neu auf (Root-Ebene)."""
         tree = self.query_one("#pcloud-tree", Tree)
         tree.root.remove_children()
         if tree.root.data:
@@ -523,15 +570,15 @@ class PCloudCommander(App):
         self.query_one("#path-bar", Static).update("pCloud: /")
         self.query_one("#pcloud-label", Label).update("☁  pCloud: /")
 
+    # ── Tree events ──────────────────────────────────────────────
+
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
-        """Lazy-Load: Ordner-Inhalt beim ersten Aufklappen laden."""
         node = event.node
         if node.data and not node.data.get("loaded") and node.data.get("is_folder"):
             node.remove_children()
             self._load_tree_node(node, node.data["id"])
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
-        """Pfad-Bar beim Cursor-Bewegen aktualisieren (pCloud & Local)."""
         if event.control.id == "pcloud-tree":
             node = event.node
             if node and node.data and isinstance(node.data, dict):
@@ -540,28 +587,25 @@ class PCloudCommander(App):
                 self.query_one("#pcloud-label", Label).update(f"☁  pCloud: {p_str}")
         elif isinstance(event.control, RobustDirectoryTree):
             if event.node and event.node.data:
-                # Robust path detection for local files
                 p_obj = getattr(event.node.data, "path", event.node.data)
                 self.query_one("#path-bar", Static).update(f"Local: {p_obj}")
 
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
-        """Lokale Datei ausgewählt: Feedback geben."""
         self.notify(f"📄 {event.path.name}  │  a=actions", severity="information")
 
     def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
-        """Lokaler Ordner ausgewählt: Pfad-Bar aktualisieren."""
         self.query_one("#path-bar", Static).update(f"Local: {event.path}")
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        """Enter auf Datei: kurze Info + Tastenbelegung anzeigen."""
         node = event.node
         if node.data and not node.data.get("is_folder"):
             name = node.data.get("name", "")
             size = self._format_size(node.data.get("size", 0))
             self.notify(f"📄 {name}  {size}  │  d=download  F8=delete", severity="information")
 
+    # ── Actions ──────────────────────────────────────────────────
+
     def _get_selected_row(self):
-        """Gibt (name_raw, item_id, is_folder) des aktuell markierten Tree-Knotens zurück."""
         tree = self.query_one("#pcloud-tree", Tree)
         node = tree.cursor_node
         if node is None or node.data is None:
@@ -570,20 +614,16 @@ class PCloudCommander(App):
         return d.get("name"), d.get("id"), d.get("is_folder", False)
 
     def action_launch(self) -> None:
-        """A — Menü mit pcloud-tools Kommandos öffnen."""
         actions = []
-        
-        # Lokale Datei ausgewählt?
+
         local_sel = None
         if self.active_pane == "left":
             tree = self.query_one(RobustDirectoryTree)
             if tree.cursor_node and tree.cursor_node.data:
                 local_sel = str(tree.cursor_node.data.path)
-        
-        # pCloud Datei ausgewählt?
+
         pcloud_name, pcloud_id, pcloud_is_folder = self._get_selected_row()
-        
-        # Bestimme Ziel-Ordner ID in pCloud
+
         target_folderid = 0
         tree = self.query_one("#pcloud-tree", Tree)
         if tree.cursor_node and tree.cursor_node.data:
@@ -592,9 +632,8 @@ class PCloudCommander(App):
             elif tree.cursor_node.parent and tree.cursor_node.parent.data:
                 target_folderid = tree.cursor_node.parent.data.get("id", 0)
 
-        # Generische Aktionen
         actions.append(("Refresh pCloud List", "refresh"))
-        
+
         if local_sel:
             path_obj = Path(local_sel)
             if path_obj.is_file():
@@ -603,12 +642,11 @@ class PCloudCommander(App):
                 actions.append((f"Sync Folder to pCloud: {path_obj.name}", f"sync_dir:{local_sel}:{target_folderid}"))
 
         if pcloud_name and not pcloud_is_folder:
-             actions.append((f"Download from pCloud: {pcloud_name}", "download"))
+            actions.append((f"Download from pCloud: {pcloud_name}", "download"))
 
         def _on_action(cmd_key: Optional[str]) -> None:
             if not cmd_key:
                 return
-            
             if cmd_key == "refresh":
                 self.refresh_list()
             elif cmd_key == "download":
@@ -618,21 +656,18 @@ class PCloudCommander(App):
                 self._run_tool("pcloud_simple_upload.py", [local_path, fid])
             elif cmd_key.startswith("sync_dir:"):
                 _, local_path, fid = cmd_key.split(":", 2)
-                # Beispiel für pcloud_quick_delta.py
                 self._run_tool("pcloud_quick_delta.py", ["--src", local_path, "--dst-id", fid])
 
         self.push_screen(ActionMenu(actions), _on_action)
 
     def _run_tool(self, script_name: str, args: List[str]):
-        """Führt ein pcloud-tools Skript aus (suspendiert TUI)."""
-        # Pfad zum Skript finden (im gleichen Verzeichnis wie pcloud_bin_lib.py)
         script_path = os.path.join(os.path.dirname(pc_path), script_name)
         if not os.path.exists(script_path):
             self.notify(f"Script not found: {script_name}", severity="error")
             return
 
         cmd = [sys.executable, script_path] + args
-        
+
         def run_in_suspend():
             with self.suspend():
                 print(f"\n>>> Running: {' '.join(cmd)}\n")
@@ -643,7 +678,6 @@ class PCloudCommander(App):
         run_in_suspend()
 
     def action_download(self) -> None:
-        """d — Markierte Datei nach DEFAULT_DOWNLOAD_DIR herunterladen."""
         if self.active_pane != "right":
             self.notify("Switch to pCloud pane to download.", severity="warning")
             return
@@ -679,7 +713,6 @@ class PCloudCommander(App):
         threading.Thread(target=_run, daemon=True).start()
 
     def action_delete(self) -> None:
-        """F8 — Markiertes Element nach Bestätigung löschen."""
         if self.active_pane != "right":
             self.notify("Switch to pCloud pane to delete.", severity="warning")
             return
@@ -706,22 +739,16 @@ class PCloudCommander(App):
 
         self.push_screen(ConfirmModal(msg), _on_confirm)
 
-
     def action_up(self):
-        """Eine Ebene nach oben: im pCloud-Tree zum Eltern-Knoten."""
         if self.active_pane == "right":
             tree = self.query_one("#pcloud-tree", Tree)
             node = tree.cursor_node
             if node and node.parent is not None and node.parent.parent is not None:
-                # Aktuellen Knoten einklappen (falls Ordner und geöffnet)
                 if node.is_expanded:
                     node.collapse()
                 tree.move_cursor(node.parent)
             elif node and node.parent is not None and node.parent.parent is None:
-                # Wir sind bereits auf Root-Ebene
                 self.notify("Already at root.", severity="warning")
-        else:
-            pass  # DirectoryTree hat eigene Navigation
 
     def _format_size(self, size):
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
@@ -733,10 +760,12 @@ class PCloudCommander(App):
     def action_refresh(self):
         self.refresh_list()
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--env-file", help="Path to .env file")
-    parser.add_argument("--local-root", default="/srv", help="Local directory to browse (default: /srv)")
+    parser.add_argument("--local-root", default="/srv",
+                        help="Local directory to browse (default: /srv)")
     parser.add_argument("--download-dir", default=DEFAULT_DOWNLOAD_DIR,
                         help=f"Local download target (default: {DEFAULT_DOWNLOAD_DIR})")
     parser.add_argument("--theme", default=DEFAULT_PALETTE,
