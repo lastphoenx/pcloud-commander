@@ -523,6 +523,25 @@ CUSTOM_CSS = """
         margin: 1 0;
     }
 
+    /* ── Quick Upload Wizard ───────────────────────────────────── */
+    #quick-upload-box {
+        width: 80;
+        height: auto;
+        border: double $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+    #quick-upload-title {
+        text-align: center;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #quick-upload-buttons {
+        align: center middle;
+        height: 3;
+        margin-top: 1;
+    }
+
     /* ── Bool Toggle ─────────────────────────────────────────────── */
     /* ── Bool Toggle (zwei nebeneinander) ───────────────────────── */
     .bool-row {
@@ -697,6 +716,82 @@ class ActionMenu(ModalScreen):
             if option_list.highlighted is not None:
                 option = option_list.get_option_at_index(option_list.highlighted)
                 self.dismiss(option.id)
+
+
+class QuickUploadModal(ModalScreen):
+    """Second-step modal for local->pCloud upload/sync via pcloud_simple_upload.py."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Cancel"),
+        Binding("f10", "start_upload", "Start"),
+    ]
+
+    def __init__(
+        self,
+        source: str,
+        destination: str,
+        local_root: str,
+        cfg: Any,
+    ) -> None:
+        super().__init__()
+        self.source = source
+        self.destination = destination
+        self.local_root = local_root
+        self.cfg = cfg
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="quick-upload-box"):
+            yield Label("Sync local folder/file to pCloud", id="quick-upload-title")
+
+            yield Label("Source (local)", classes="param-label")
+            with Horizontal(classes="path-row"):
+                yield Input(self.source, id="quick-src", classes="path-input")
+                yield Button("📁", id="quick-src-browse", classes="path-browse-btn")
+
+            yield Label("Destination (pCloud)", classes="param-label")
+            with Horizontal(classes="path-row"):
+                yield Input(self.destination, id="quick-dst", classes="path-input")
+                yield Button("☁", id="quick-dst-browse", classes="path-browse-btn")
+
+            yield Static("Source starts at /srv (or configured local root), destination is pCloud folder.", classes="param-help")
+
+            with Horizontal(id="quick-upload-buttons"):
+                yield Button("Start Upload [F10]", id="btn-run", variant="success")
+                yield Button("Cancel [Esc]", id="btn-cancel", variant="error")
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss(None)
+
+    def action_start_upload(self) -> None:
+        src = self.query_one("#quick-src", Input).value.strip()
+        dst = self.query_one("#quick-dst", Input).value.strip()
+        self.dismiss({"source": src, "destination": dst})
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id or ""
+        if btn_id == "btn-run":
+            self.action_start_upload()
+            return
+        if btn_id == "btn-cancel":
+            self.dismiss(None)
+            return
+
+        if btn_id == "quick-src-browse":
+            start = self.query_one("#quick-src", Input).value.strip() or self.local_root
+
+            def _on_src(path_sel: Optional[str]) -> None:
+                if path_sel:
+                    self.query_one("#quick-src", Input).value = path_sel
+
+            self.app.push_screen(PathBrowserScreen(start_path=start, folder_only=False), _on_src)
+            return
+
+        if btn_id == "quick-dst-browse":
+            def _on_dst(path_sel: Optional[str]) -> None:
+                if path_sel:
+                    self.query_one("#quick-dst", Input).value = path_sel
+
+            self.app.push_screen(PCloudBrowserScreen(cfg=self.cfg, folder_only=True), _on_dst)
 
 
 # ==================== Path Browser ====================
@@ -2181,42 +2276,56 @@ class PCloudCommander(App):
             _, local_path, _fid = cmd_key.split(":", 2)
             env_file = self.env_file or "/opt/apps/pcloud-tools/main/.env"
             destination = pcloud_target_path if pcloud_target_path.endswith("/") else pcloud_target_path + "/"
-            msg = (
-                "Quick Action: Upload file to pCloud\n\n"
-                f"Source: {local_path}\n"
-                f"Destination: {destination}\n\n"
-                "Start upload now?"
-            )
 
-            def _on_confirm(confirmed: bool) -> None:
-                if not confirmed:
+            def _on_quick_cfg(result: Optional[Dict[str, str]]) -> None:
+                if not result:
+                    return
+                src = result.get("source", "").strip()
+                dst = result.get("destination", "").strip()
+                if not src or not dst:
+                    self.notify("Source and destination are required.", severity="warning")
                     return
                 self._run_tool(
                     "pcloud_simple_upload.py",
-                    ["--env-file", env_file, "--source", local_path, "--destination", destination],
+                    ["--env-file", env_file, "--source", src, "--destination", dst],
                 )
 
-            self.push_screen(ConfirmModal(msg), _on_confirm)
+            self.push_screen(
+                QuickUploadModal(
+                    source=local_path,
+                    destination=destination,
+                    local_root=self.local_root,
+                    cfg=self.cfg,
+                ),
+                _on_quick_cfg,
+            )
         elif cmd_key.startswith("sync_dir:"):
             _, local_path, _fid = cmd_key.split(":", 2)
             env_file = self.env_file or "/opt/apps/pcloud-tools/main/.env"
             destination = pcloud_target_path if pcloud_target_path.endswith("/") else pcloud_target_path + "/"
-            msg = (
-                "Quick Action: Sync local folder to pCloud (upload)\n\n"
-                f"Source folder: {local_path}\n"
-                f"Destination: {destination}\n\n"
-                "Start sync/upload now?"
-            )
 
-            def _on_confirm(confirmed: bool) -> None:
-                if not confirmed:
+            def _on_quick_cfg(result: Optional[Dict[str, str]]) -> None:
+                if not result:
+                    return
+                src = result.get("source", "").strip()
+                dst = result.get("destination", "").strip()
+                if not src or not dst:
+                    self.notify("Source and destination are required.", severity="warning")
                     return
                 self._run_tool(
                     "pcloud_simple_upload.py",
-                    ["--env-file", env_file, "--source", local_path, "--destination", destination],
+                    ["--env-file", env_file, "--source", src, "--destination", dst],
                 )
 
-            self.push_screen(ConfirmModal(msg), _on_confirm)
+            self.push_screen(
+                QuickUploadModal(
+                    source=local_path or self.local_root,
+                    destination=destination,
+                    local_root=self.local_root,
+                    cfg=self.cfg,
+                ),
+                _on_quick_cfg,
+            )
 
     def _run_catalog_script_with_params(
         self, script: Dict[str, Any], user_params: Dict[str, Any]
