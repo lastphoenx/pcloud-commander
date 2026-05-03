@@ -412,8 +412,6 @@ class ActionMenu(ModalScreen):
 class PCloudCommander(App):
     """pCloud Commander TUI."""
 
-    _themes_registered = False
-
     TITLE = "pCloud Commander"
     SUB_TITLE = "Interactive Dual-Pane Browser"
 
@@ -441,15 +439,14 @@ class PCloudCommander(App):
         self._palette_name = palette_name
         self.palette = PALETTES.get(palette_name, PALETTES[DEFAULT_PALETTE])
 
-        # Register ALL palettes as Textual themes
-        if not PCloudCommander._themes_registered:
-            for pal in PALETTES.values():
-                self.register_theme(build_theme(pal))
-            PCloudCommander._themes_registered = True
+        # Register ALL palettes and activate the selected one immediately
+        for name, pal in PALETTES.items():
+            self.register_theme(build_theme(pal))
+        # KEY FIX: Set theme in __init__, not on_mount — ensures CSS
+        # variables are resolved from OUR theme before first render.
+        self.theme = self._palette_name
 
     def on_mount(self) -> None:
-        # Activate the selected theme — this sets all $variables globally
-        self.theme = self._palette_name
         self._apply_pane_focus()
         self.call_after_refresh(self._init_pcloud_tree)
 
