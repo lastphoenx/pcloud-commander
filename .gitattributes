@@ -1,0 +1,19 @@
+# Default to LF in the repository to avoid cross-platform churn.
+* text=auto eol=lf
+
+# Windows-native scripts can stay CRLF if needed.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Shell and Python should remain LF.
+*.sh text eol=lf
+*.py text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
