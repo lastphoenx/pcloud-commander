@@ -16,6 +16,7 @@ import sys
 import argparse
 import threading
 import subprocess
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Any, Dict
@@ -621,6 +622,41 @@ class ConfirmModal(ModalScreen):
             self.dismiss(False)
         elif event.key == "f8":
             self.dismiss(True)
+
+
+class TextInputModal(ModalScreen):
+    """Simple text input modal with OK/Cancel."""
+
+    def __init__(self, title: str, placeholder: str = "", initial: str = "") -> None:
+        super().__init__()
+        self.title = title
+        self.placeholder = placeholder
+        self.initial = initial
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-box"):
+            yield Static(self.title, id="confirm-msg")
+            yield Input(value=self.initial, placeholder=self.placeholder, id="text-input-modal")
+            with Horizontal(id="confirm-buttons"):
+                yield Button("OK [Enter]", id="btn-yes")
+                yield Button("Cancel [Esc]", id="btn-no")
+
+    def on_mount(self) -> None:
+        self.query_one("#text-input-modal", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value.strip() or None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-yes":
+            value = self.query_one("#text-input-modal", Input).value.strip()
+            self.dismiss(value or None)
+        else:
+            self.dismiss(None)
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(None)
 
 
 class ActionMenu(ModalScreen):
@@ -1293,7 +1329,8 @@ class PCloudCommander(App):
         Binding("tab", "switch_pane", "Switch Pane"),
         Binding("d", "download", "Download", show=True),
         Binding("f8", "delete", "Delete", show=True),
-        Binding("a", "launch", "Actions", show=True),
+        Binding("a", "file_actions", "File Actions", show=True),
+        Binding("s", "launch", "Scripts", show=True),
     ]
 
     def __init__(self, cfg_overrides=None, local_root: str = "/srv",
@@ -1631,6 +1668,233 @@ class PCloudCommander(App):
             return None, None, None
         d = node.data
         return d.get("name"), d.get("id"), d.get("is_folder", False)
+
+    def _reload_local_tree(self) -> None:
+        try:
+            self.query_one(RobustDirectoryTree).reload()
+        except Exception:
+            pass
+
+    def _local_selected_path(self) -> Optional[Path]:
+        try:
+            tree = self.query_one(RobustDirectoryTree)
+            node = tree.cursor_node
+            if node and node.data:
+                return Path(str(node.data.path))
+        except Exception:
+            return None
+        return None
+
+    def _pcloud_selected_info(self) -> Optional[Dict[str, Any]]:
+        tree = self.query_one("#pcloud-tree", Tree)
+        node = tree.cursor_node
+        if node is None or not node.data:
+            return None
+        d = node.data
+        is_folder = bool(d.get("is_folder", False))
+        name = str(d.get("name", ""))
+        item_id = int(d.get("id", 0))
+        if is_folder:
+            folder_path = self._node_path_str(node)
+            parent_node = node.parent
+            parent_id = int(parent_node.data.get("id", 0)) if (parent_node and parent_node.data) else 0
+            parent_path = self._node_path_str(parent_node) if parent_node else "/"
+            return {
+                "is_folder": True,
+                "name": name,
+                "id": item_id,
+                "path": folder_path,
+                "parent_id": parent_id,
+                "parent_path": parent_path,
+            }
+
+        parent_node = node.parent
+        parent_id = int(parent_node.data.get("id", 0)) if (parent_node and parent_node.data) else 0
+        parent_path = self._node_path_str(parent_node) if parent_node else "/"
+        full_path = parent_path.rstrip("/") + "/" + name
+        return {
+            "is_folder": False,
+            "name": name,
+            "id": item_id,
+            "path": full_path,
+            "parent_id": parent_id,
+            "parent_path": parent_path,
+        }
+
+    def action_file_actions(self) -> None:
+        actions: List[tuple[str, str]] = []
+        if self.active_pane == "left":
+            actions.extend([
+                ("New Local Subfolder", "local_mkdir"),
+                ("Copy Local Item", "local_copy"),
+                ("Move Local Item", "local_move"),
+                ("Rename Local Item", "local_rename"),
+                ("Delete Local Item", "local_delete"),
+            ])
+        else:
+            actions.extend([
+                ("Refresh pCloud List", "refresh"),
+                ("New pCloud Subfolder", "pcloud_mkdir"),
+                ("Copy pCloud Item", "pcloud_copy"),
+                ("Move pCloud Item", "pcloud_move"),
+                ("Delete pCloud Item", "pcloud_delete"),
+            ])
+
+        def _on_action(cmd_key: Optional[str]) -> None:
+            if not cmd_key:
+                return
+            if cmd_key == "refresh":
+                self.refresh_list()
+                return
+
+            # Local ops
+            if cmd_key == "local_mkdir":
+                base = self._local_selected_path() or Path(self.local_root)
+                if base.is_file():
+                    base = base.parent
+                def _on_name(name: Optional[str]) -> None:
+                    if not name:
+                        return
+                    try:
+                        (base / name).mkdir(parents=False, exist_ok=False)
+                        self._reload_local_tree()
+                        self.notify(f"Created local folder: {base / name}", severity="information")
+                    except Exception as e:
+                        self.notify(f"Create local folder failed: {e}", severity="error")
+                self.push_screen(TextInputModal("New local subfolder name", "folder-name"), _on_name)
+                return
+
+            if cmd_key in {"local_copy", "local_move", "local_rename", "local_delete"}:
+                src = self._local_selected_path()
+                if not src or not src.exists():
+                    self.notify("No local item selected.", severity="warning")
+                    return
+
+                if cmd_key == "local_delete":
+                    def _on_confirm(confirmed: bool) -> None:
+                        if not confirmed:
+                            return
+                        try:
+                            if src.is_dir():
+                                shutil.rmtree(src)
+                            else:
+                                src.unlink()
+                            self._reload_local_tree()
+                            self.notify(f"Deleted local item: {src.name}", severity="information")
+                        except Exception as e:
+                            self.notify(f"Delete local item failed: {e}", severity="error")
+                    self.push_screen(ConfirmModal(f"Delete local item:\n{src}?"), _on_confirm)
+                    return
+
+                if cmd_key == "local_rename":
+                    def _on_new_name(new_name: Optional[str]) -> None:
+                        if not new_name:
+                            return
+                        try:
+                            src.rename(src.with_name(new_name))
+                            self._reload_local_tree()
+                            self.notify("Local item renamed.", severity="information")
+                        except Exception as e:
+                            self.notify(f"Rename local item failed: {e}", severity="error")
+                    self.push_screen(TextInputModal("New name", "new-name", src.name), _on_new_name)
+                    return
+
+                def _on_dest(dest_text: Optional[str]) -> None:
+                    if not dest_text:
+                        return
+                    try:
+                        dest_dir = Path(dest_text)
+                        dest_dir.mkdir(parents=True, exist_ok=True)
+                        if cmd_key == "local_copy":
+                            if src.is_dir():
+                                shutil.copytree(src, dest_dir / src.name, dirs_exist_ok=True)
+                            else:
+                                shutil.copy2(src, dest_dir / src.name)
+                            self.notify("Local copy completed.", severity="information")
+                        else:
+                            shutil.move(str(src), str(dest_dir / src.name))
+                            self.notify("Local move completed.", severity="information")
+                        self._reload_local_tree()
+                    except Exception as e:
+                        self.notify(f"Local operation failed: {e}", severity="error")
+
+                default_dest = str(src.parent)
+                prompt = "Destination local folder"
+                self.push_screen(TextInputModal(prompt, "/path/to/folder", default_dest), _on_dest)
+                return
+
+            # pCloud ops
+            info = self._pcloud_selected_info()
+            if cmd_key in {"pcloud_mkdir", "pcloud_copy", "pcloud_move", "pcloud_delete"} and not info:
+                self.notify("No pCloud item selected.", severity="warning")
+                return
+
+            if cmd_key == "pcloud_mkdir":
+                base_folder = info["path"] if info and info["is_folder"] else (info["parent_path"] if info else "/")
+                def _on_name(name: Optional[str]) -> None:
+                    if not name:
+                        return
+                    try:
+                        new_path = base_folder.rstrip("/") + "/" + name
+                        pc.createfolder(self.cfg, new_path)
+                        self.refresh_list()
+                        self.notify(f"Created pCloud folder: {new_path}", severity="information")
+                    except Exception as e:
+                        self.notify(f"Create pCloud folder failed: {e}", severity="error")
+                self.push_screen(TextInputModal("New pCloud subfolder name", "folder-name"), _on_name)
+                return
+
+            if cmd_key == "pcloud_delete":
+                target = info
+                kind = "folder (recursive)" if target["is_folder"] else "file"
+                def _on_confirm(confirmed: bool) -> None:
+                    if not confirmed:
+                        return
+                    try:
+                        if target["is_folder"]:
+                            pc.deletefolder_recursive(self.cfg, folderid=target["id"])
+                        else:
+                            pc.deletefile(self.cfg, fileid=target["id"])
+                        self.refresh_list()
+                        self.notify(f"Deleted pCloud {kind}: {target['name']}", severity="information")
+                    except Exception as e:
+                        self.notify(f"Delete pCloud item failed: {e}", severity="error")
+                self.push_screen(ConfirmModal(f"Delete pCloud {kind}:\n{target['name']}?"), _on_confirm)
+                return
+
+            if cmd_key in {"pcloud_copy", "pcloud_move"}:
+                target = info
+                default_dest = str(target["parent_path"]).rstrip("/") or "/"
+                def _on_dest(dest_folder: Optional[str]) -> None:
+                    if not dest_folder:
+                        return
+                    try:
+                        dest_folder = "/" + dest_folder.strip("/") if dest_folder != "/" else "/"
+                        if cmd_key == "pcloud_copy":
+                            if target["is_folder"]:
+                                pc.copyfolder(self.cfg, from_folderid=target["id"], to_path=dest_folder)
+                            else:
+                                to_path = dest_folder.rstrip("/") + "/" + target["name"]
+                                pc.copyfile(self.cfg, from_fileid=target["id"], to_path=to_path)
+                            self.notify("pCloud copy completed.", severity="information")
+                        else:
+                            if target["is_folder"]:
+                                # Fallback move for folders: copy + delete
+                                pc.copyfolder(self.cfg, from_folderid=target["id"], to_path=dest_folder)
+                                pc.deletefolder_recursive(self.cfg, folderid=target["id"])
+                            else:
+                                to_path = dest_folder.rstrip("/") + "/" + target["name"]
+                                pc.move(self.cfg, from_fileid=target["id"], to_path=to_path)
+                            self.notify("pCloud move completed.", severity="information")
+                        self.refresh_list()
+                    except Exception as e:
+                        self.notify(f"pCloud operation failed: {e}", severity="error")
+
+                prompt = "Destination pCloud folder path"
+                self.push_screen(TextInputModal(prompt, "/Backup/target", default_dest), _on_dest)
+                return
+
+        self.push_screen(ActionMenu(actions), _on_action)
 
     def _autofill_params(self, script: Dict[str, Any]) -> Dict[str, Any]:
         """Pre-fill param values from autofill context + YAML defaults."""
