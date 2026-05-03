@@ -739,6 +739,8 @@ class PathBrowserScreen(ModalScreen):
         Binding("escape", "dismiss_screen", "Abbrechen"),
         Binding("space", "select_current", "Auswählen"),
         Binding("f5", "new_folder", "Neuer Ordner"),
+        Binding("backspace", "go_up", "Hoch"),
+        Binding("u", "go_up", "Hoch"),
     ]
 
     def __init__(self, start_path: str = "/", folder_only: bool = False) -> None:
@@ -770,6 +772,8 @@ class PathBrowserScreen(ModalScreen):
     def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
         self._current_dir = str(event.path)
         self.query_one("#browser-current", Static).update(self._current_dir)
+        if self.folder_only:
+            self.dismiss(self._current_dir)
 
     def _cursor_path(self) -> Optional[str]:
         tree = self.query_one("#browser-tree", RobustDirectoryTree)
@@ -784,6 +788,16 @@ class PathBrowserScreen(ModalScreen):
         p = self._cursor_path()
         if p:
             self.dismiss(p)
+
+    def action_go_up(self) -> None:
+        tree = self.query_one("#browser-tree", RobustDirectoryTree)
+        node = tree.cursor_node
+        if node and node.parent is not None and node.parent.parent is not None:
+            tree.move_cursor(node.parent)
+            return
+        # If we're at browser root, keep selecting that root instead of doing nothing.
+        root_path = str(self.start_path)
+        self.query_one("#browser-current", Static).update(root_path)
 
     def action_dismiss_screen(self) -> None:
         self.dismiss(None)
@@ -818,6 +832,8 @@ class PCloudBrowserScreen(ModalScreen):
     BINDINGS = [
         Binding("escape", "dismiss_screen", "Abbrechen"),
         Binding("space", "select_current", "Auswählen"),
+        Binding("backspace", "go_up", "Hoch"),
+        Binding("u", "go_up", "Hoch"),
     ]
 
     def __init__(self, cfg: Any, folder_only: bool = False) -> None:
@@ -903,6 +919,18 @@ class PCloudBrowserScreen(ModalScreen):
 
     def action_select_current(self) -> None:
         self.dismiss(self._current_path)
+
+    def action_go_up(self) -> None:
+        tree = self.query_one("#pcloud-browse-tree", Tree)
+        node = tree.cursor_node
+        if node and node.parent is not None and node.parent.parent is not None:
+            tree.move_cursor(node.parent)
+            self._current_path = self._node_path(node.parent)
+            self.query_one("#browser-current", Static).update(self._current_path)
+        else:
+            tree.move_cursor(tree.root)
+            self._current_path = "/"
+            self.query_one("#browser-current", Static).update("/")
 
     def action_dismiss_screen(self) -> None:
         self.dismiss(None)
@@ -1874,26 +1902,35 @@ class PCloudCommander(App):
                 def _on_dest(dest_text: Optional[str]) -> None:
                     if not dest_text:
                         return
-                    try:
-                        dest_dir = Path(dest_text)
-                        if not self._is_within_local_root(dest_dir):
-                            self.notify(f"Destination must stay inside {self.local_root}", severity="warning")
+                    def _on_name(new_name: Optional[str]) -> None:
+                        if not new_name:
                             return
-                        dest_dir.mkdir(parents=True, exist_ok=True)
-                        if cmd_key == "local_copy":
-                            if src.is_dir():
-                                shutil.copytree(src, dest_dir / src.name, dirs_exist_ok=True)
+                        try:
+                            dest_dir = Path(dest_text)
+                            if not self._is_within_local_root(dest_dir):
+                                self.notify(f"Destination must stay inside {self.local_root}", severity="warning")
+                                return
+                            dest_dir.mkdir(parents=True, exist_ok=True)
+                            target_path = dest_dir / new_name
+                            if cmd_key == "local_copy":
+                                if src.is_dir():
+                                    shutil.copytree(src, target_path, dirs_exist_ok=True)
+                                else:
+                                    shutil.copy2(src, target_path)
+                                self.notify("Local copy completed.", severity="information")
                             else:
-                                shutil.copy2(src, dest_dir / src.name)
-                            self.notify("Local copy completed.", severity="information")
-                        else:
-                            shutil.move(str(src), str(dest_dir / src.name))
-                            self.notify("Local move completed.", severity="information")
-                        self._reload_local_tree()
-                    except Exception as e:
-                        self.notify(f"Local operation failed: {e}", severity="error")
+                                shutil.move(str(src), str(target_path))
+                                self.notify("Local move completed.", severity="information")
+                            self._reload_local_tree()
+                        except Exception as e:
+                            self.notify(f"Local operation failed: {e}", severity="error")
 
-                start_dest = str(src.parent if self._is_within_local_root(src.parent) else Path(self.local_root))
+                    self.push_screen(
+                        TextInputModal("Target name", "name", src.name),
+                        _on_name,
+                    )
+
+                start_dest = str(Path(self.local_root))
                 self.push_screen(
                     PathBrowserScreen(start_path=start_dest, folder_only=True),
                     _on_dest,
@@ -1947,27 +1984,39 @@ class PCloudCommander(App):
                 def _on_dest(dest_folder: Optional[str]) -> None:
                     if not dest_folder:
                         return
-                    try:
-                        dest_folder = "/" + dest_folder.strip("/") if dest_folder != "/" else "/"
-                        if cmd_key == "pcloud_copy":
-                            if target["is_folder"]:
-                                pc.copyfolder(self.cfg, from_folderid=target["id"], to_path=dest_folder)
+                    def _on_name(new_name: Optional[str]) -> None:
+                        if not new_name:
+                            return
+                        try:
+                            dest_folder_norm = "/" + dest_folder.strip("/") if dest_folder != "/" else "/"
+                            if target["is_folder"] and new_name != target["name"]:
+                                self.notify("Folder rename on copy/move is currently not supported here.", severity="warning")
+                                return
+
+                            if cmd_key == "pcloud_copy":
+                                if target["is_folder"]:
+                                    pc.copyfolder(self.cfg, from_folderid=target["id"], to_path=dest_folder_norm)
+                                else:
+                                    to_path = dest_folder_norm.rstrip("/") + "/" + new_name
+                                    pc.copyfile(self.cfg, from_fileid=target["id"], to_path=to_path)
+                                self.notify("pCloud copy completed.", severity="information")
                             else:
-                                to_path = dest_folder.rstrip("/") + "/" + target["name"]
-                                pc.copyfile(self.cfg, from_fileid=target["id"], to_path=to_path)
-                            self.notify("pCloud copy completed.", severity="information")
-                        else:
-                            if target["is_folder"]:
-                                # Fallback move for folders: copy + delete
-                                pc.copyfolder(self.cfg, from_folderid=target["id"], to_path=dest_folder)
-                                pc.deletefolder_recursive(self.cfg, folderid=target["id"])
-                            else:
-                                to_path = dest_folder.rstrip("/") + "/" + target["name"]
-                                pc.move(self.cfg, from_fileid=target["id"], to_path=to_path)
-                            self.notify("pCloud move completed.", severity="information")
-                        self.refresh_list()
-                    except Exception as e:
-                        self.notify(f"pCloud operation failed: {e}", severity="error")
+                                if target["is_folder"]:
+                                    # Fallback move for folders: copy + delete
+                                    pc.copyfolder(self.cfg, from_folderid=target["id"], to_path=dest_folder_norm)
+                                    pc.deletefolder_recursive(self.cfg, folderid=target["id"])
+                                else:
+                                    to_path = dest_folder_norm.rstrip("/") + "/" + new_name
+                                    pc.move(self.cfg, from_fileid=target["id"], to_path=to_path)
+                                self.notify("pCloud move completed.", severity="information")
+                            self.refresh_list()
+                        except Exception as e:
+                            self.notify(f"pCloud operation failed: {e}", severity="error")
+
+                    self.push_screen(
+                        TextInputModal("Target name", "name", target["name"]),
+                        _on_name,
+                    )
 
                 self.push_screen(
                     PCloudBrowserScreen(cfg=self.cfg, folder_only=True),
