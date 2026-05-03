@@ -2167,17 +2167,56 @@ class PCloudCommander(App):
 
         return out
 
-    def _handle_quick_action(self, cmd_key: str, local_sel: Optional[str]) -> None:
+    def _handle_quick_action(
+        self,
+        cmd_key: str,
+        local_sel: Optional[str],
+        pcloud_target_path: str,
+    ) -> None:
         if cmd_key == "refresh":
             self.refresh_list()
         elif cmd_key == "download":
             self.action_download()
         elif cmd_key.startswith("upload_file:"):
-            _, local_path, fid = cmd_key.split(":", 2)
-            self._run_tool("pcloud_simple_upload.py", [local_path, fid])
+            _, local_path, _fid = cmd_key.split(":", 2)
+            env_file = self.env_file or "/opt/apps/pcloud-tools/main/.env"
+            destination = pcloud_target_path if pcloud_target_path.endswith("/") else pcloud_target_path + "/"
+            msg = (
+                "Quick Action: Upload file to pCloud\n\n"
+                f"Source: {local_path}\n"
+                f"Destination: {destination}\n\n"
+                "Start upload now?"
+            )
+
+            def _on_confirm(confirmed: bool) -> None:
+                if not confirmed:
+                    return
+                self._run_tool(
+                    "pcloud_simple_upload.py",
+                    ["--env-file", env_file, "--source", local_path, "--destination", destination],
+                )
+
+            self.push_screen(ConfirmModal(msg), _on_confirm)
         elif cmd_key.startswith("sync_dir:"):
-            _, local_path, fid = cmd_key.split(":", 2)
-            self._run_tool("pcloud_quick_delta.py", ["--src", local_path, "--dst-id", fid])
+            _, local_path, _fid = cmd_key.split(":", 2)
+            env_file = self.env_file or "/opt/apps/pcloud-tools/main/.env"
+            destination = pcloud_target_path if pcloud_target_path.endswith("/") else pcloud_target_path + "/"
+            msg = (
+                "Quick Action: Sync local folder to pCloud (upload)\n\n"
+                f"Source folder: {local_path}\n"
+                f"Destination: {destination}\n\n"
+                "Start sync/upload now?"
+            )
+
+            def _on_confirm(confirmed: bool) -> None:
+                if not confirmed:
+                    return
+                self._run_tool(
+                    "pcloud_simple_upload.py",
+                    ["--env-file", env_file, "--source", local_path, "--destination", destination],
+                )
+
+            self.push_screen(ConfirmModal(msg), _on_confirm)
 
     def _run_catalog_script_with_params(
         self, script: Dict[str, Any], user_params: Dict[str, Any]
@@ -2250,13 +2289,21 @@ class PCloudCommander(App):
             elif tree.cursor_node.parent and tree.cursor_node.parent.data:
                 target_folderid = tree.cursor_node.parent.data.get("id", 0)
 
-        quick_actions: List[tuple] = [("Refresh pCloud List", "refresh")]
+        pcloud_target_id, pcloud_target_path = self._current_pcloud_target()
+
+        quick_actions: List[tuple] = [
+            ("Refresh pCloud List (reload right pane)", "refresh")
+        ]
         if local_sel:
             path_obj = Path(local_sel)
             if path_obj.is_file():
-                quick_actions.append((f"Upload: {path_obj.name}", f"upload_file:{local_sel}:{target_folderid}"))
+                quick_actions.append(
+                    (f"Upload file to pCloud target: {path_obj.name}", f"upload_file:{local_sel}:{target_folderid}")
+                )
             elif path_obj.is_dir():
-                quick_actions.append((f"Sync Folder: {path_obj.name}", f"sync_dir:{local_sel}:{target_folderid}"))
+                quick_actions.append(
+                    (f"Sync folder to pCloud target: {path_obj.name}", f"sync_dir:{local_sel}:{target_folderid}")
+                )
         if pcloud_name and not pcloud_is_folder:
             quick_actions.append((f"Download: {pcloud_name}", "download"))
 
@@ -2266,7 +2313,7 @@ class PCloudCommander(App):
             self.notify(f"No scripts catalog: {detail}", severity="warning", timeout=6)
             def _on_quick(cmd_key: Optional[str]) -> None:
                 if cmd_key:
-                    self._handle_quick_action(cmd_key, local_sel)
+                    self._handle_quick_action(cmd_key, local_sel, pcloud_target_path)
             self.push_screen(ActionMenu([(label, cmd) for label, cmd in quick_actions]), _on_quick)
             return
 
@@ -2274,7 +2321,7 @@ class PCloudCommander(App):
             if not result:
                 return
             if result["type"] == "quick":
-                self._handle_quick_action(result["cmd"], local_sel)
+                self._handle_quick_action(result["cmd"], local_sel, pcloud_target_path)
             elif result["type"] == "script":
                 catalog_idx = result["catalog_idx"]
                 user_params = result["user_params"]
