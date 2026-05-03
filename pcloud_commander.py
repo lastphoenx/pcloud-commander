@@ -72,7 +72,8 @@ if not pc:
 # ==================== Textual UI ====================
 
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Static, DirectoryTree, Label, Tree
+from textual.widgets import Header, Footer, Static, DirectoryTree, Label, Tree, OptionList
+from textual.widgets.option_list import Option
 from textual.containers import Container, Horizontal, Vertical
 from textual.binding import Binding
 from textual.screen import ModalScreen
@@ -142,9 +143,6 @@ class ConfirmModal(ModalScreen):
             self.dismiss(True)
 
 
-from textual.widgets import Button, SelectionList
-from textual.widgets.selection_list import Selection
-
 
 class ActionMenu(ModalScreen):
     """Menü zur Auswahl von pcloud-tools Kommandos."""
@@ -152,30 +150,49 @@ class ActionMenu(ModalScreen):
     CSS = """
     ActionMenu {
         align: center middle;
-        background: rgba(0, 0, 0, 0.7);
+        background: rgba(0, 0, 0, 0.8);
     }
     #menu-box {
-        width: 80;
-        height: 20;
-        border: double #7dcfff;
-        background: #1a1b26;
+        width: 70;
+        height: auto;
+        max-height: 25;
+        border: double #ff79c6; /* Neon Magenta */
+        background: #1e1e1e;
         padding: 1 2;
     }
     #menu-title {
-        height: 2;
-        color: #bb9af7;
+        height: 1;
+        margin-bottom: 1;
+        color: #f1c40f; /* Yellow */
         text-align: center;
         text-style: bold;
     }
-    SelectionList {
-        height: 1fr;
-        border: solid #414868;
-        background: #1a1b26;
+    OptionList {
+        background: #1e1e1e;
+        color: #a9b1d6;
+        border: solid #333333;
+    }
+    OptionList > .option-list--cursor {
+        background: #f1c40f;
+        color: #000000;
+        text-style: bold;
     }
     #menu-buttons {
         align: center middle;
         height: 3;
         margin-top: 1;
+    }
+    Button {
+        margin: 0 2;
+        border: none;
+    }
+    #btn-run {
+        background: #50fa7b; /* Green */
+        color: #000000;
+    }
+    #btn-cancel {
+        background: #ff5555; /* Red */
+        color: #000000;
     }
     """
 
@@ -186,17 +203,21 @@ class ActionMenu(ModalScreen):
     def compose(self) -> ComposeResult:
         with Vertical(id="menu-box"):
             yield Label("Select Action to Run", id="menu-title")
-            yield SelectionList[str](
-                *[Selection(label, cmd, False) for label, cmd in self.actions]
+            yield OptionList(
+                *[Option(label, id=cmd) for label, cmd in self.actions]
             )
             with Horizontal(id="menu-buttons"):
-                yield Button("Run [Enter]", variant="success", id="btn-run")
-                yield Button("Cancel [Esc]", variant="primary", id="btn-cancel")
+                yield Button("Run [Enter]", id="btn-run")
+                yield Button("Cancel [Esc]", id="btn-cancel")
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-run":
-            selected = self.query_one(SelectionList).selected
-            self.dismiss(selected[0] if selected else None)
+            selected = self.query_one(OptionList).highlighted
+            if selected is not None:
+                self.dismiss(self.actions[selected][1])
         else:
             self.dismiss(None)
 
@@ -204,8 +225,9 @@ class ActionMenu(ModalScreen):
         if event.key == "escape":
             self.dismiss(None)
         elif event.key == "enter":
-            selected = self.query_one(SelectionList).selected
-            self.dismiss(selected[0] if selected else None)
+            selected = self.query_one(OptionList).highlighted
+            if selected is not None:
+                self.dismiss(self.actions[selected][1])
 
 
 class PCloudCommander(App):
@@ -227,90 +249,99 @@ class PCloudCommander(App):
     
     CSS = """
     Screen {
-        background: #1a1b26;
-        color: #a9b1d6;
+        background: #000000;
+        color: #ffffff;
     }
 
     #left-pane, #right-pane {
         width: 1fr;
         height: 1fr;
-        border: solid #24283b;
-        background: #1a1b26;
+        border: solid #333333;
+        background: #000000;
     }
     #left-pane.active-pane, #right-pane.active-pane {
-        border: double #7dcfff; /* Cyan border for active pane */
+        border: double #00ffff; /* Neon Cyan for active pane */
     }
     
     /* Panel Headers */
     .panel-label {
         height: 1;
-        background: #24283b;
-        color: #7982a9;
+        background: #1a1a1a;
+        color: #aaaaaa;
         padding: 0 1;
         text-style: bold;
     }
     .active-pane .panel-label {
-        background: #bb9af7; /* Lavender for active header */
-        color: #1a1b26;
+        background: #f1c40f; /* Yellow for active header */
+        color: #000000;
     }
 
     /* DirectoryTree (Local) */
     DirectoryTree {
         height: 1fr;
-        background: #1a1b26;
-        color: #a9b1d6;
+        background: #000000;
+        color: #ffffff;
     }
     DirectoryTree > .directory-tree--cursor {
-        background: #f1c40f; /* Yellow cursor like MC/Toad */
+        background: #f1c40f; /* Yellow cursor */
         color: #000000;
         text-style: bold;
     }
     DirectoryTree > .directory-tree--file {
-        color: #9ece6a; /* Muted Green for Files */
+        color: #50fa7b; /* Neon Green for Files */
     }
     DirectoryTree > .directory-tree--folder {
-        color: #7aa2f7; /* Soft Blue for Folders */
+        color: #bd93f9; /* Purple for Folders */
         text-style: bold;
     }
 
     /* pCloud Tree (right pane) */
     #pcloud-tree {
         height: 1fr;
-        background: #1a1b26;
-        color: #a9b1d6;
-        scrollbar-background: #1a1b26;
-        scrollbar-color: #414868;
-        scrollbar-color-hover: #7dcfff;
+        background: #000000;
+        color: #ffffff;
     }
     #pcloud-tree > .tree--cursor {
-        background: #f1c40f;
+        background: #f1c40f; /* Yellow cursor */
         color: #000000;
         text-style: bold;
     }
     #pcloud-tree .tree--guides {
-        color: #414868;
-    }
-    #pcloud-tree .tree--guides-hover {
-        color: #7dcfff;
+        color: #444444;
     }
     #pcloud-tree .tree--label {
-        color: #a9b1d6;
+        color: #ffffff;
     }
 
     /* Path & Status Bars */
     #path-bar {
         height: 1;
-        background: #f1c40f; /* Yellow bar like in screenshot */
+        background: #f1c40f; /* Solid Yellow bar */
         color: #000000;
         padding: 0 1;
         text-style: bold;
     }
     #status-bar {
         height: 1;
-        background: #414868; /* Distinct blue-grey for status bar */
-        color: #c0caf5;
+        background: #1a1a1a;
+        color: #ff79c6; /* Neon Pink */
         padding: 0 1;
         text-style: italic;
+    }
+
+    /* ActionMenu Style Fixes */
+    #menu-box {
+        border: double #00ffff;
+        background: #000000;
+    }
+    OptionList {
+        background: #000000;
+        color: #ffffff;
+    }
+    OptionList > .option-list--cursor {
+        background: #f1c40f;
+        color: #000000;
+        text-style: bold;
     }
     """
 
@@ -466,15 +497,24 @@ class PCloudCommander(App):
         # pCloud Datei ausgewählt?
         pcloud_name, pcloud_id, pcloud_is_folder = self._get_selected_row()
         
+        # Bestimme Ziel-Ordner ID in pCloud
+        target_folderid = 0
+        tree = self.query_one("#pcloud-tree", Tree)
+        if tree.cursor_node and tree.cursor_node.data:
+            if pcloud_is_folder:
+                target_folderid = pcloud_id
+            elif tree.cursor_node.parent and tree.cursor_node.parent.data:
+                target_folderid = tree.cursor_node.parent.data.get("id", 0)
+
         # Generische Aktionen
         actions.append(("Refresh pCloud List", "refresh"))
         
         if local_sel:
             path_obj = Path(local_sel)
             if path_obj.is_file():
-                actions.append((f"Upload to pCloud: {path_obj.name}", f"upload_file:{local_sel}"))
+                actions.append((f"Upload to pCloud: {path_obj.name}", f"upload_file:{local_sel}:{target_folderid}"))
             elif path_obj.is_dir():
-                actions.append((f"Sync Folder to pCloud: {path_obj.name}", f"sync_dir:{local_sel}"))
+                actions.append((f"Sync Folder to pCloud: {path_obj.name}", f"sync_dir:{local_sel}:{target_folderid}"))
 
         if pcloud_name and not pcloud_is_folder:
              actions.append((f"Download from pCloud: {pcloud_name}", "download"))
@@ -488,12 +528,12 @@ class PCloudCommander(App):
             elif cmd_key == "download":
                 self.action_download()
             elif cmd_key.startswith("upload_file:"):
-                local_path = cmd_key.split(":", 1)[1]
-                self._run_tool("pcloud_simple_upload.py", [local_path, str(self.current_folderid)])
+                _, local_path, fid = cmd_key.split(":", 2)
+                self._run_tool("pcloud_simple_upload.py", [local_path, fid])
             elif cmd_key.startswith("sync_dir:"):
-                local_path = cmd_key.split(":", 1)[1]
+                _, local_path, fid = cmd_key.split(":", 2)
                 # Beispiel für pcloud_quick_delta.py
-                self._run_tool("pcloud_quick_delta.py", ["--src", local_path, "--dst-id", str(self.current_folderid)])
+                self._run_tool("pcloud_quick_delta.py", ["--src", local_path, "--dst-id", fid])
 
         self.push_screen(ActionMenu(actions), _on_action)
 
