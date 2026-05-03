@@ -3,8 +3,8 @@
 
 # === Pfade definieren ===
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PCLOUD_TOOLS_DIR="/opt/apps/pcloud-tools/main"
-VENV_PATH="$PCLOUD_TOOLS_DIR/.venv"
+PCLOUD_TOOLS_DIR="/opt/apps/pcloud-tools"
+VENV_PATH="$PCLOUD_TOOLS_DIR/venv"
 
 # === Farben ===
 RED='\033[0;31m'
@@ -25,7 +25,7 @@ source "$VENV_PATH/bin/activate"
 if ! python3 -c "import textual" &> /dev/null; then
     echo -e "${RED}Error: 'textual' not installed in venv.${NC}"
     echo "Updating dependencies..."
-    pip install -r "$PCLOUD_TOOLS_DIR/requirements.txt"
+    pip install -r "$PCLOUD_TOOLS_DIR/main/requirements.txt"
 fi
 
 # === App starten ===
