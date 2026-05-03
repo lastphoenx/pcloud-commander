@@ -89,19 +89,24 @@ class PCloudCommander(App):
     CSS = """
     DataTable {
         height: 1fr;
-        border: solid $primary;
+        border: solid #f1c40f;
+    }
+    DataTable > .datatable--cursor {
+        background: #f1c40f;
+        color: #000000;
+        text-style: bold;
     }
     #path-bar {
         height: 1;
-        background: #1a252f;
-        color: #5dade2;
+        background: #f1c40f;
+        color: #000000;
         padding: 0 1;
         text-style: bold;
     }
     #status-bar {
         height: 1;
-        background: #2c3e50;
-        color: #ecf0f1;
+        background: #34495e;
+        color: #ffffff;
         padding: 0 1;
         text-style: italic;
     }
