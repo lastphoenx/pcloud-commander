@@ -11,6 +11,7 @@ import sys
 import argparse
 import threading
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List
 
@@ -82,6 +83,205 @@ from textual.widgets import Button
 
 DEFAULT_DOWNLOAD_DIR = "/srv/nas/restore"
 
+# ==================== Theme System ====================
+
+@dataclass
+class Palette:
+    """Central color palette. All CSS is derived from these tokens."""
+    name: str
+    # Backgrounds
+    bg: str           # screen background
+    surface: str      # pane / widget background (same as bg or slightly lighter)
+    panel: str        # header/footer/label strips
+    overlay: str      # modal dialog background
+    # Borders
+    border: str       # inactive pane border
+    border_active: str  # active pane + modal border (accent color)
+    # Text
+    text: str         # primary readable text
+    text_muted: str   # inactive labels, hints
+    text_dim: str     # guides, status bar, very dimmed
+    # Cursor / selection
+    accent: str       # cursor/selection background (focused)
+    accent_fg: str    # text ON accent background
+    accent_dim: str   # cursor background when tree is NOT focused
+    # Semantic item colors
+    folder: str       # folder nodes
+    file: str         # file nodes
+    # Button semantics
+    success: str      # Run / Yes button background
+    error: str        # Cancel / No / Delete button background
+
+
+PALETTES: dict[str, Palette] = {
+    # ── Posting-like: calm teal on near-black ──────────────────────────────
+    "posting": Palette(
+        name="posting",
+        bg="#0d0d0d", surface="#0d0d0d", panel="#1a1a1a", overlay="#111111",
+        border="#2d2d2d", border_active="#00b5cc",
+        text="#d0d0d0", text_muted="#666666", text_dim="#3a3a3a",
+        accent="#f1c40f", accent_fg="#000000", accent_dim="#a88900",
+        folder="#9d84c7", file="#7ec8a0",
+        success="#27ae60", error="#c0392b",
+    ),
+    # ── Hacker: terminal green on black ────────────────────────────────────
+    "hacker": Palette(
+        name="hacker",
+        bg="#000000", surface="#000000", panel="#0a0a0a", overlay="#050505",
+        border="#1a3a1a", border_active="#00ff41",
+        text="#00cc33", text_muted="#006614", text_dim="#003308",
+        accent="#00ff41", accent_fg="#000000", accent_dim="#00aa2b",
+        folder="#00cc33", file="#009922",
+        success="#00ff41", error="#ff0000",
+    ),
+    # ── Calm: muted blue-grey ──────────────────────────────────────────────
+    "calm": Palette(
+        name="calm",
+        bg="#1c1e26", surface="#232530", panel="#2a2c3a", overlay="#1c1e26",
+        border="#3a3c4e", border_active="#6c91bf",
+        text="#a8aebb", text_muted="#5c6270", text_dim="#3a3c4e",
+        accent="#6c91bf", accent_fg="#1c1e26", accent_dim="#3d5a80",
+        folder="#b083ea", file="#59c6ab",
+        success="#3fc56b", error="#fc4b5f",
+    ),
+}
+
+DEFAULT_PALETTE = "posting"
+
+
+def build_css(p: Palette) -> str:
+    """Generate full app CSS from a single Palette — one source of truth."""
+    return f"""
+    /* ── Screen ─────────────────────────────────────────────────── */
+    Screen {{
+        background: {p.bg};
+        color: {p.text};
+    }}
+
+    /* ── Panes ───────────────────────────────────────────────────── */
+    #left-pane, #right-pane {{
+        width: 1fr;
+        height: 1fr;
+        border: solid {p.border};
+        background: {p.surface};
+    }}
+    #left-pane.active-pane, #right-pane.active-pane {{
+        border: double {p.border_active};
+    }}
+
+    /* ── Panel labels (pane headers) ─────────────────────────────── */
+    .panel-label {{
+        height: 1;
+        background: {p.panel};
+        color: {p.text_muted};
+        padding: 0 1;
+        text-style: bold;
+    }}
+    .active-pane .panel-label {{
+        color: {p.border_active};
+    }}
+
+    /* ── Trees: local (DirectoryTree) AND pCloud (Tree) ──────────── */
+    /*   Both trees share the same rules — same look left and right.  */
+    DirectoryTree, #pcloud-tree {{
+        height: 1fr;
+        background: {p.surface};
+        color: {p.text};
+    }}
+    /* Guide lines */
+    DirectoryTree .tree--guides,
+    #pcloud-tree .tree--guides {{
+        color: {p.text_dim};
+    }}
+    /* Folder / file node colors (DirectoryTree-specific classes) */
+    DirectoryTree .directory-tree--folder {{
+        color: {p.folder};
+        text-style: bold;
+    }}
+    DirectoryTree .directory-tree--file {{
+        color: {p.file};
+    }}
+    /* Cursor: focused tree (same selector for both widget types) */
+    DirectoryTree .tree--cursor,
+    #pcloud-tree .tree--cursor {{
+        background: {p.accent};
+        color: {p.accent_fg};
+        text-style: bold;
+    }}
+    /* Cursor: unfocused tree — MUST be styled or Textual uses its default blue */
+    DirectoryTree .tree--highlight,
+    #pcloud-tree .tree--highlight {{
+        background: {p.accent_dim};
+        color: {p.accent_fg};
+    }}
+
+    /* ── Path bar ─────────────────────────────────────────────────── */
+    #path-bar {{
+        height: 1;
+        background: {p.panel};
+        color: {p.border_active};
+        padding: 0 1;
+        text-style: bold;
+    }}
+
+    /* ── Status bar ───────────────────────────────────────────────── */
+    #status-bar {{
+        height: 1;
+        background: {p.panel};
+        color: {p.text_dim};
+        padding: 0 1;
+    }}
+
+    /* ── Modals (ActionMenu + ConfirmModal) ───────────────────────── */
+    ActionMenu, ConfirmModal {{
+        align: center middle;
+        background: rgba(0, 0, 0, 0.8);
+    }}
+    #menu-box, #confirm-box {{
+        width: 60;
+        height: auto;
+        border: double {p.border_active};
+        background: {p.overlay};
+        padding: 1 2;
+    }}
+    #menu-title, #confirm-msg {{
+        color: {p.text};
+        text-align: center;
+        text-style: bold;
+        margin-bottom: 1;
+    }}
+
+    /* ── OptionList ───────────────────────────────────────────────── */
+    OptionList {{
+        background: {p.overlay};
+        color: {p.text};
+        border: solid {p.border};
+    }}
+    OptionList > .option-list--option-highlighted {{
+        background: {p.accent};
+        color: {p.accent_fg};
+        text-style: bold;
+    }}
+
+    /* ── Buttons ──────────────────────────────────────────────────── */
+    #menu-buttons, #confirm-buttons {{
+        align: center middle;
+        height: 3;
+        margin-top: 1;
+    }}
+    Button {{
+        margin: 0 2;
+        text-style: bold;
+    }}
+    #btn-run, #btn-yes {{
+        background: {p.success};
+        color: {p.accent_fg};
+    }}
+    #btn-cancel, #btn-no {{
+        background: {p.error};
+        color: #ffffff;
+    }}
+    """
 
 class ConfirmModal(ModalScreen):
     """Einfaches Ja/Nein-Popup."""
@@ -151,10 +351,10 @@ class ActionMenu(ModalScreen):
 
 class PCloudCommander(App):
     """pCloud Commander TUI."""
-    
+
     TITLE = "pCloud Commander"
     SUB_TITLE = "Interactive Dual-Pane Browser"
-    
+
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
@@ -165,131 +365,21 @@ class PCloudCommander(App):
         Binding("f8", "delete", "Delete", show=True),
         Binding("a", "launch", "Actions", show=True),
     ]
-    
-    CSS = """
-    Screen {
-        background: #000000;
-        color: #ffffff;
-    }
 
-    #left-pane, #right-pane {
-        width: 1fr;
-        height: 1fr;
-        border: solid #333333;
-        background: #000000;
-    }
-    #left-pane.active-pane, #right-pane.active-pane {
-        border: double #00ffff;
-    }
-    
-    .panel-label {
-        height: 1;
-        background: #1a1a1a;
-        color: #888888;
-        padding: 0 1;
-        text-style: bold;
-    }
-    .active-pane .panel-label {
-        background: #ff00ff;
-        color: #000000;
-    }
+    # CSS is set dynamically in __init__ via build_css(palette)
+    CSS = build_css(PALETTES[DEFAULT_PALETTE])
 
-    /* CURSOR & SELECTION: High-Visibility Fix */
-    /* Force absolute black text on yellow background for all tree types */
-    .tree--cursor, 
-    .directory-tree--cursor, 
-    .option-list--cursor,
-    *:focus > .tree--cursor,
-    *:focus > .directory-tree--cursor {
-        background: #ffff00 !important;
-        color: #000000 !important;
-        text-style: bold;
-    }
-
-    /* Deep recursive fix to stop gray/white labels on yellow cursor */
-    .tree--cursor *, 
-    .directory-tree--cursor *, 
-    .option-list--cursor * {
-        color: #000000 !important;
-        background: transparent !important;
-    }
-
-    .tree--file, .directory-tree--file {
-        color: #00ff00;
-    }
-    .tree--folder, .directory-tree--folder {
-        color: #bc92ff;
-        text-style: bold;
-    }
-    .tree--guides {
-        color: #444444;
-    }
-
-    #path-bar {
-        height: 1;
-        background: #ffff00;
-        color: #000000;
-        padding: 0 1;
-        text-style: bold;
-    }
-    #status-bar {
-        height: 1;
-        background: #000000;
-        color: #666666;
-        border-top: solid #333333;
-        padding: 0 1;
-    }
-
-    ActionMenu, ConfirmModal {
-        align: center middle;
-        background: rgba(0, 0, 0, 0.8);
-    }
-    #menu-box, #confirm-box {
-        width: 60;
-        border: double #ff00ff;
-        background: #000000;
-        padding: 1 2;
-    }
-    #menu-title, #confirm-msg {
-        color: #ffffff;
-        text-align: center;
-        text-style: bold;
-        margin-bottom: 1;
-    }
-    
-    OptionList {
-        background: #000000;
-        color: #ffffff;
-        border: solid #333333;
-    }
-
-    #menu-buttons, #confirm-buttons {
-        align: center middle;
-        height: 3;
-        margin-top: 1;
-    }
-    Button {
-        margin: 0 2;
-        text-style: bold;
-    }
-    #btn-run, #btn-yes {
-        background: #00ff00;
-        color: #000000;
-    }
-    #btn-cancel, #btn-no {
-        background: #ff0000;
-        color: #000000;
-    }
-    """
-
-    def __init__(self, cfg_overrides=None, local_root: str = "/srv"):
+    def __init__(self, cfg_overrides=None, local_root: str = "/srv",
+                 palette_name: str = DEFAULT_PALETTE):
         super().__init__()
         self.env_file = find_env_file()
         self.cfg = pc.effective_config(env_file=self.env_file, overrides=cfg_overrides)
-        # Fallback auf / falls /srv nicht existiert (lokale Entwicklung)
         self.local_root = local_root if Path(local_root).exists() else "/"
-        self.active_pane = "right"  # Startfokus auf pCloud
+        self.active_pane = "right"
         self.download_dir = DEFAULT_DOWNLOAD_DIR
+        # Apply selected palette
+        palette = PALETTES.get(palette_name, PALETTES[DEFAULT_PALETTE])
+        PCloudCommander.CSS = build_css(palette)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -604,11 +694,15 @@ if __name__ == "__main__":
     parser.add_argument("--local-root", default="/srv", help="Local directory to browse (default: /srv)")
     parser.add_argument("--download-dir", default=DEFAULT_DOWNLOAD_DIR,
                         help=f"Local download target (default: {DEFAULT_DOWNLOAD_DIR})")
+    parser.add_argument("--theme", default=DEFAULT_PALETTE,
+                        choices=list(PALETTES.keys()),
+                        help=f"Color theme: {', '.join(PALETTES.keys())} (default: {DEFAULT_PALETTE})")
     args = parser.parse_args()
-    
+
     app = PCloudCommander(
         cfg_overrides={"env_file": args.env_file} if args.env_file else None,
         local_root=args.local_root,
+        palette_name=args.theme,
     )
     app.download_dir = args.download_dir
     app.run()
