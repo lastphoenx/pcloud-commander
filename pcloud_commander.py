@@ -86,42 +86,6 @@ DEFAULT_DOWNLOAD_DIR = "/srv/nas/restore"
 class ConfirmModal(ModalScreen):
     """Einfaches Ja/Nein-Popup."""
 
-    CSS = """
-    ConfirmModal {
-        align: center middle;
-        background: rgba(0, 0, 0, 0.7);
-    }
-    #confirm-box {
-        width: 60;
-        height: 11;
-        border: double #00b5cc;
-        background: #111111;
-        padding: 1 2;
-    }
-    #confirm-msg {
-        height: 4;
-        color: #e0e0e0;
-        text-align: center;
-        text-style: bold;
-    }
-    #confirm-buttons {
-        align: center middle;
-        height: 3;
-        margin-top: 1;
-    }
-    Button {
-        margin: 0 2;
-    }
-    #btn-yes {
-        background: #e74c3c;
-        color: #ffffff;
-    }
-    #btn-no {
-        background: #444444;
-        color: #e0e0e0;
-    }
-    """
-
     def __init__(self, message: str) -> None:
         super().__init__()
         self.message = message
@@ -130,8 +94,8 @@ class ConfirmModal(ModalScreen):
         with Vertical(id="confirm-box"):
             yield Static(self.message, id="confirm-msg")
             with Horizontal(id="confirm-buttons"):
-                yield Button("Yes [F8]", variant="error", id="btn-yes")
-                yield Button("No  [Esc]", variant="primary", id="btn-no")
+                yield Button("Yes [F8]", id="btn-yes")
+                yield Button("No  [Esc]", id="btn-no")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "btn-yes")
@@ -146,55 +110,6 @@ class ConfirmModal(ModalScreen):
 
 class ActionMenu(ModalScreen):
     """Menü zur Auswahl von pcloud-tools Kommandos."""
-
-    CSS = """
-    ActionMenu {
-        align: center middle;
-        background: rgba(0, 0, 0, 0.8);
-    }
-    #menu-box {
-        width: 70;
-        height: auto;
-        max-height: 25;
-        border: double #00b5cc;
-        background: #111111;
-        padding: 1 2;
-    }
-    #menu-title {
-        height: 1;
-        margin-bottom: 1;
-        color: #f1c40f;
-        text-align: center;
-        text-style: bold;
-    }
-    OptionList {
-        background: #111111;
-        color: #c0c0c0;
-        border: solid #2d2d2d;
-    }
-    OptionList > .option-list--cursor {
-        background: #f1c40f;
-        color: #000000;
-        text-style: bold;
-    }
-    #menu-buttons {
-        align: center middle;
-        height: 3;
-        margin-top: 1;
-    }
-    Button {
-        margin: 0 2;
-        border: none;
-    }
-    #btn-run {
-        background: #27ae60;
-        color: #ffffff;
-    }
-    #btn-cancel {
-        background: #555555;
-        color: #e0e0e0;
-    }
-    """
 
     def __init__(self, actions: List[tuple[str, str]]) -> None:
         super().__init__()
@@ -211,13 +126,16 @@ class ActionMenu(ModalScreen):
                 yield Button("Cancel [Esc]", id="btn-cancel")
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Auswahl per Enter oder Klick auf Option."""
         self.dismiss(event.option.id)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Auswahl per Run-Button."""
         if event.button.id == "btn-run":
-            selected = self.query_one(OptionList).highlighted
-            if selected is not None:
-                self.dismiss(self.actions[selected][1])
+            option_list = self.query_one(OptionList)
+            if option_list.highlighted is not None:
+                option = option_list.get_option_at_index(option_list.highlighted)
+                self.dismiss(option.id)
         else:
             self.dismiss(None)
 
@@ -225,9 +143,10 @@ class ActionMenu(ModalScreen):
         if event.key == "escape":
             self.dismiss(None)
         elif event.key == "enter":
-            selected = self.query_one(OptionList).highlighted
-            if selected is not None:
-                self.dismiss(self.actions[selected][1])
+            option_list = self.query_one(OptionList)
+            if option_list.highlighted is not None:
+                option = option_list.get_option_at_index(option_list.highlighted)
+                self.dismiss(option.id)
 
 
 class PCloudCommander(App):
@@ -249,21 +168,20 @@ class PCloudCommander(App):
     
     CSS = """
     Screen {
-        background: #0d0d0d;
-        color: #e0e0e0;
+        background: #000000;
+        color: #ffffff;
     }
 
     #left-pane, #right-pane {
         width: 1fr;
         height: 1fr;
-        border: solid #2d2d2d;
-        background: #0d0d0d;
+        border: solid #333333;
+        background: #000000;
     }
     #left-pane.active-pane, #right-pane.active-pane {
-        border: double #00b5cc;
+        border: double #00ffff;
     }
-
-    /* Panel Headers */
+    
     .panel-label {
         height: 1;
         background: #1a1a1a;
@@ -272,76 +190,95 @@ class PCloudCommander(App):
         text-style: bold;
     }
     .active-pane .panel-label {
-        background: #1a1a1a;
-        color: #00b5cc;
-    }
-
-    /* DirectoryTree (Local) */
-    DirectoryTree {
-        height: 1fr;
-        background: #0d0d0d;
-        color: #c0c0c0;
-    }
-    DirectoryTree > .directory-tree--cursor {
-        background: #f1c40f;
+        background: #ff00ff;
         color: #000000;
-        text-style: bold;
     }
-    DirectoryTree > .directory-tree--file {
-        color: #7ec8a0;
-    }
-    DirectoryTree > .directory-tree--folder {
-        color: #9d84c7;
+
+    /* CURSOR & SELECTION: High-Visibility Fix */
+    /* Force absolute black text on yellow background for all tree types */
+    .tree--cursor, 
+    .directory-tree--cursor, 
+    .option-list--cursor,
+    *:focus > .tree--cursor,
+    *:focus > .directory-tree--cursor {
+        background: #ffff00 !important;
+        color: #000000 !important;
         text-style: bold;
     }
 
-    /* pCloud Tree (right pane) */
-    #pcloud-tree {
-        height: 1fr;
-        background: #0d0d0d;
-        color: #c0c0c0;
-    }
-    #pcloud-tree > .tree--cursor {
-        background: #f1c40f;
-        color: #000000;
-        text-style: bold;
-    }
-    #pcloud-tree .tree--guides {
-        color: #3a3a3a;
-    }
-    #pcloud-tree .tree--label {
-        color: #c0c0c0;
+    /* Deep recursive fix to stop gray/white labels on yellow cursor */
+    .tree--cursor *, 
+    .directory-tree--cursor *, 
+    .option-list--cursor * {
+        color: #000000 !important;
+        background: transparent !important;
     }
 
-    /* Path & Status Bars */
+    .tree--file, .directory-tree--file {
+        color: #00ff00;
+    }
+    .tree--folder, .directory-tree--folder {
+        color: #bc92ff;
+        text-style: bold;
+    }
+    .tree--guides {
+        color: #444444;
+    }
+
     #path-bar {
         height: 1;
-        background: #1a1a1a;
-        color: #f1c40f;
+        background: #ffff00;
+        color: #000000;
         padding: 0 1;
         text-style: bold;
     }
     #status-bar {
         height: 1;
-        background: #111111;
+        background: #000000;
         color: #666666;
+        border-top: solid #333333;
         padding: 0 1;
-        text-style: italic;
     }
 
-    /* ActionMenu Style Fixes (override modal CSS) */
-    #menu-box {
-        border: double #00b5cc;
-        background: #111111;
+    ActionMenu, ConfirmModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.8);
     }
-    OptionList {
-        background: #111111;
-        color: #c0c0c0;
+    #menu-box, #confirm-box {
+        width: 60;
+        border: double #ff00ff;
+        background: #000000;
+        padding: 1 2;
     }
-    OptionList > .option-list--cursor {
-        background: #f1c40f;
-        color: #000000;
+    #menu-title, #confirm-msg {
+        color: #ffffff;
+        text-align: center;
         text-style: bold;
+        margin-bottom: 1;
+    }
+    
+    OptionList {
+        background: #000000;
+        color: #ffffff;
+        border: solid #333333;
+    }
+
+    #menu-buttons, #confirm-buttons {
+        align: center middle;
+        height: 3;
+        margin-top: 1;
+    }
+    Button {
+        margin: 0 2;
+        text-style: bold;
+    }
+    #btn-run, #btn-yes {
+        background: #00ff00;
+        color: #000000;
+    }
+    #btn-cancel, #btn-no {
+        background: #ff0000;
+        color: #000000;
     }
     """
 
@@ -459,14 +396,26 @@ class PCloudCommander(App):
             self._load_tree_node(node, node.data["id"])
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
-        """Pfad-Bar beim Cursor-Bewegen aktualisieren."""
-        if event.control.id != "pcloud-tree":
-            return
-        node = event.node
-        if node and node.data and isinstance(node.data, dict):
-            path = self._node_path_str(node)
-            self.query_one("#path-bar", Static).update(f"pCloud: {path}")
-            self.query_one("#pcloud-label", Label).update(f"☁  pCloud: {path}")
+        """Pfad-Bar beim Cursor-Bewegen aktualisieren (pCloud & Local)."""
+        if event.control.id == "pcloud-tree":
+            node = event.node
+            if node and node.data and isinstance(node.data, dict):
+                p_str = self._node_path_str(node)
+                self.query_one("#path-bar", Static).update(f"pCloud: {p_str}")
+                self.query_one("#pcloud-label", Label).update(f"☁  pCloud: {p_str}")
+        elif isinstance(event.control, DirectoryTree):
+            if event.node and event.node.data:
+                # Robust path detection for local files
+                p_obj = getattr(event.node.data, "path", event.node.data)
+                self.query_one("#path-bar", Static).update(f"Local: {p_obj}")
+
+    def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
+        """Lokale Datei ausgewählt: Feedback geben."""
+        self.notify(f"📄 {event.path.name}  │  a=actions", severity="information")
+
+    def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
+        """Lokaler Ordner ausgewählt: Pfad-Bar aktualisieren."""
+        self.query_one("#path-bar", Static).update(f"Local: {event.path}")
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         """Enter auf Datei: kurze Info + Tastenbelegung anzeigen."""
