@@ -730,6 +730,10 @@ class PCloudCommander(App):
         pcloud_folderid: int,
         pcloud_path: str,
     ) -> List[str]:
+        def flag_for(name: str) -> str:
+            """Map YAML param names to argparse-style CLI flags."""
+            return f"--{name.replace('_', '-')}"
+
         cmd = [str(script.get("cmd"))] + [str(a) for a in script.get("args", [])]
         params = script.get("params", []) or []
 
@@ -757,12 +761,12 @@ class PCloudCommander(App):
             if p_type in {"path", "string", "int"}:
                 if any(k in lname for k in ["folderid", "dst-id", "dst_id", "remote_id"]):
                     value = pcloud_folderid
-                elif any(k in lname for k in ["remote", "pcloud", "dst", "target_folder", "folder"]) and not value:
+                elif any(k in lname for k in ["remote_path", "pcloud_path", "dst_path", "target_path", "destination"]) and not value:
                     value = pcloud_path
 
             if p_type == "bool":
                 if bool(value):
-                    cmd.append(f"--{name}")
+                    cmd.append(flag_for(name))
                 continue
 
             if value in (None, ""):
@@ -771,7 +775,7 @@ class PCloudCommander(App):
             if arg_mode == "positional":
                 cmd.append(str(value))
             else:
-                cmd.extend([f"--{name}", str(value)])
+                cmd.extend([flag_for(name), str(value)])
 
         return cmd
 
