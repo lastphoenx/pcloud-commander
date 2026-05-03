@@ -1087,29 +1087,31 @@ class ScriptFormScreen(ModalScreen):
         if btn_id == "btn-start":
             self.dismiss(self._collect_values())
         elif btn_id == "btn-form-cancel":
-                    elif btn_id.startswith("boolyes__") or btn_id.startswith("boolno__"):
-                        event.stop()
-                        is_yes = btn_id.startswith("boolyes__")
-                        pname_clean = btn_id[len("boolyes__"):] if is_yes else btn_id[len("boolno__"):]
-                        pname_orig = pname_clean
-                        for p in self._params:
-                            pn = str(p.get("name", ""))
-                            if pn.replace("-", "_").replace(".", "_") == pname_clean:
-                                pname_orig = pn
-                                break
-                        self._bool_state[pname_orig] = is_yes
-                        yes_wid = "#boolyes__" + pname_clean
-                        no_wid  = "#boolno__"  + pname_clean
-                        try:
-                            yes_btn = self.query_one(yes_wid, Button)
-                            no_btn  = self.query_one(no_wid,  Button)
-                            if is_yes:
-                                yes_btn.add_class("active"); no_btn.remove_class("active")
-                            else:
-                                no_btn.add_class("active");  yes_btn.remove_class("active")
-                        except Exception:
-                            pass
             self.dismiss(None)
+        elif btn_id.startswith("boolyes__") or btn_id.startswith("boolno__"):
+            event.stop()
+            is_yes = btn_id.startswith("boolyes__")
+            pname_clean = btn_id[len("boolyes__"):] if is_yes else btn_id[len("boolno__"):]
+            pname_orig = pname_clean
+            for p in self._params:
+                pn = str(p.get("name", ""))
+                if pn.replace("-", "_").replace(".", "_") == pname_clean:
+                    pname_orig = pn
+                    break
+            self._bool_state[pname_orig] = is_yes
+            yes_wid = "#boolyes__" + pname_clean
+            no_wid  = "#boolno__" + pname_clean
+            try:
+                yes_btn = self.query_one(yes_wid, Button)
+                no_btn = self.query_one(no_wid, Button)
+                if is_yes:
+                    yes_btn.add_class("active")
+                    no_btn.remove_class("active")
+                else:
+                    no_btn.add_class("active")
+                    yes_btn.remove_class("active")
+            except Exception:
+                pass
         elif btn_id.startswith("browse__"):
             pname_clean = btn_id[len("browse__"):]
             input_id = "#param__" + pname_clean
