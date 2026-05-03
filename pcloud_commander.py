@@ -769,6 +769,22 @@ class QuickUploadModal(ModalScreen):
     def action_start_upload(self) -> None:
         src = self.query_one("#quick-src", Input).value.strip()
         dst = self.query_one("#quick-dst", Input).value.strip()
+        if not src or not dst:
+            self.app.notify("Source and destination are required.", severity="warning")
+            return
+
+        # Safety: prevent accidental upload of entire local root (/srv by default)
+        try:
+            if Path(src).resolve() == Path(self.local_root).resolve():
+                self.app.notify(
+                    f"Safety stop: source '{self.local_root}' is not allowed directly. Please choose a subfolder or file.",
+                    severity="warning",
+                    timeout=8,
+                )
+                return
+        except Exception:
+            pass
+
         self.dismiss({"source": src, "destination": dst})
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -2323,7 +2339,7 @@ class PCloudCommander(App):
 
             self.push_screen(
                 QuickUploadModal(
-                    source=local_path or self.local_root,
+                    source="" if (local_path and str(Path(local_path)) == str(Path(self.local_root))) else (local_path or ""),
                     destination=destination,
                     local_root=self.local_root,
                     cfg=self.cfg,
