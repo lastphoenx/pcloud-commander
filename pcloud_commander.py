@@ -22,8 +22,10 @@ from typing import Optional, List, Any, Dict
 
 try:
     import yaml
-except Exception:
+    YAML_IMPORT_ERROR = ""
+except Exception as e:
     yaml = None
+    YAML_IMPORT_ERROR = str(e)
 
 # ==================== Library Loading ====================
 
@@ -506,6 +508,7 @@ class PCloudCommander(App):
         self.download_dir = DEFAULT_DOWNLOAD_DIR
         self._palette_name = palette_name
         self.palette = PALETTES.get(palette_name, PALETTES[DEFAULT_PALETTE])
+        self.script_catalog_error = ""
         self.script_catalog = self._load_external_script_catalog()
 
         # Register ALL palettes and activate the selected one immediately
@@ -516,6 +519,8 @@ class PCloudCommander(App):
         self.theme = self._palette_name
 
     def on_mount(self) -> None:
+        if self.script_catalog_error:
+            self.notify(f"scripts.yaml unavailable: {self.script_catalog_error}", severity="warning", timeout=8)
         self._apply_pane_focus()
         self.call_after_refresh(self._init_pcloud_tree)
 
@@ -666,6 +671,7 @@ class PCloudCommander(App):
     def _load_external_script_catalog(self) -> List[Dict[str, Any]]:
         """Load script definitions from script-manager-ui YAML in read-only mode."""
         if yaml is None:
+            self.script_catalog_error = f"PyYAML missing ({YAML_IMPORT_ERROR or 'import failed'})"
             return []
 
         script_dir = Path(__file__).resolve().parent
@@ -681,9 +687,16 @@ class PCloudCommander(App):
                 data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
                 scripts = data.get("scripts", [])
                 if isinstance(scripts, list):
+                    if not scripts:
+                        self.script_catalog_error = f"{path}: no scripts entries"
+                        return []
+                    self.script_catalog_error = ""
                     return [s for s in scripts if isinstance(s, dict) and s.get("name") and s.get("cmd")]
-            except Exception:
+            except Exception as e:
+                self.script_catalog_error = f"{path}: {e}"
                 continue
+        if not self.script_catalog_error:
+            self.script_catalog_error = "scripts.yaml not found"
         return []
 
     def _load_env_file_vars(self, env_file_path: Path) -> Dict[str, str]:
@@ -856,7 +869,8 @@ class PCloudCommander(App):
                 label = f"Run Script: {script_name}"
                 actions.append((label, f"yaml_script:{idx}"))
         else:
-            actions.append(("(No scripts.yaml catalog found)", "noop"))
+            detail = self.script_catalog_error or "no catalog"
+            actions.append((f"(No scripts catalog: {detail[:36]})", "noop"))
 
         def _on_action(cmd_key: Optional[str]) -> None:
             if not cmd_key:
@@ -866,7 +880,11 @@ class PCloudCommander(App):
             elif cmd_key == "download":
                 self.action_download()
             elif cmd_key == "noop":
-                self.notify("No external scripts catalog available.", severity="warning")
+                self.notify(
+                    f"No external scripts catalog available: {self.script_catalog_error or 'unknown reason'}",
+                    severity="warning",
+                    timeout=8,
+                )
             elif cmd_key.startswith("upload_file:"):
                 _, local_path, fid = cmd_key.split(":", 2)
                 self._run_tool("pcloud_simple_upload.py", [local_path, fid])

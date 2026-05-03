@@ -28,6 +28,13 @@ if ! python3 -c "import textual" &> /dev/null; then
     pip install -r "$PCLOUD_TOOLS_DIR/main/requirements.txt"
 fi
 
+# === Check: PyYAML installiert? (needed for scripts.yaml catalog) ===
+if ! python3 -c "import yaml" &> /dev/null; then
+    echo -e "${RED}Warning: 'PyYAML' not installed in venv.${NC}"
+    echo "Installing PyYAML..."
+    pip install pyyaml
+fi
+
 # === App starten ===
 echo -e "${GREEN}Starting pCloud Commander...${NC}"
 COLORTERM="${COLORTERM:-truecolor}" TERM="${TERM:-xterm-256color}" python3 "$SCRIPT_DIR/pcloud_commander.py" "$@"
