@@ -9,6 +9,7 @@ Based on pcloud_bin_lib.py and Textual.
 import os
 import sys
 import argparse
+from pathlib import Path
 from typing import Optional, List
 
 # ==================== Library Loading ====================
@@ -69,8 +70,8 @@ if not pc:
 # ==================== Textual UI ====================
 
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, DataTable, Static
-from textual.containers import Container
+from textual.widgets import Header, Footer, DataTable, Static, DirectoryTree, Label
+from textual.containers import Container, Horizontal, Vertical
 from textual.binding import Binding
 
 class PCloudCommander(App):
@@ -84,12 +85,30 @@ class PCloudCommander(App):
         Binding("r", "refresh", "Refresh"),
         Binding("backspace", "up", "Go Up"),
         Binding("u", "up", "Go Up"),
+        Binding("tab", "switch_pane", "Switch Pane"),
     ]
     
     CSS = """
+    #left-pane, #right-pane {
+        width: 1fr;
+        height: 1fr;
+        border: solid #555555;
+    }
+    #left-pane.active-pane, #right-pane.active-pane {
+        border: solid #f1c40f;
+    }
+    #left-pane Label {
+        height: 1;
+        background: #2c3e50;
+        color: #f1c40f;
+        padding: 0 1;
+        text-style: bold;
+    }
+    DirectoryTree {
+        height: 1fr;
+    }
     DataTable {
         height: 1fr;
-        border: solid #f1c40f;
     }
     DataTable > .datatable--cursor {
         background: #f1c40f;
@@ -112,20 +131,29 @@ class PCloudCommander(App):
     }
     """
 
-    def __init__(self, cfg_overrides=None):
+    def __init__(self, cfg_overrides=None, local_root: str = "/srv/nas"):
         super().__init__()
         self.env_file = find_env_file()
         self.cfg = pc.effective_config(env_file=self.env_file, overrides=cfg_overrides)
         self.current_folderid = 0
-        self.history: List[tuple[int, str]] = []  # Stack von (folderid, name)
+        self.history: List[tuple[int, str]] = []
         self.current_path_str = "/"
+        self.local_root = local_root if Path(local_root).exists() else str(Path.home())
+        self.active_pane = "right"  # right = pCloud, left = local
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Static(self.current_path_str, id="path-bar")
-        yield Container(
-            DataTable(cursor_type="row"),
-            id="main-container"
+        yield Static("", id="path-bar")
+        yield Horizontal(
+            Vertical(
+                Label(f"📁 Local: {self.local_root}"),
+                DirectoryTree(self.local_root),
+                id="left-pane",
+            ),
+            Vertical(
+                DataTable(cursor_type="row"),
+                id="right-pane",
+            ),
         )
         yield Static(f"Lib: {pc_path} | Env: {self.env_file}", id="status-bar")
         yield Footer()
@@ -133,15 +161,31 @@ class PCloudCommander(App):
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
         table.add_columns("Name", "Size", "Modified", "ID")
+        self._apply_pane_focus()
         self.refresh_list()
+
+    def _apply_pane_focus(self) -> None:
+        left = self.query_one("#left-pane")
+        right = self.query_one("#right-pane")
+        if self.active_pane == "left":
+            left.add_class("active-pane")
+            right.remove_class("active-pane")
+            self.query_one(DirectoryTree).focus()
+        else:
+            right.add_class("active-pane")
+            left.remove_class("active-pane")
+            self.query_one(DataTable).focus()
+
+    def action_switch_pane(self) -> None:
+        self.active_pane = "left" if self.active_pane == "right" else "right"
+        self._apply_pane_focus()
 
     def refresh_list(self):
         table = self.query_one(DataTable)
         table.clear()
         
-        # Pfad-Anzeige aktualisieren
         path_bar = self.query_one("#path-bar", Static)
-        path_bar.update(f"📂 {self.current_path_str}")
+        path_bar.update(f"☁  pCloud: {self.current_path_str}")
 
         try:
             res = pc.listfolder(self.cfg, folderid=self.current_folderid)
@@ -149,7 +193,6 @@ class PCloudCommander(App):
                 metadata = res.get("metadata", {})
                 contents = metadata.get("contents", [])
                 
-                # Verzeichnisse zuerst
                 for item in sorted(contents, key=lambda x: (not x["isfolder"], x["name"].lower())):
                     name = item["name"]
                     if item["isfolder"]:
@@ -216,7 +259,11 @@ class PCloudCommander(App):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--env-file", help="Path to .env file")
+    parser.add_argument("--local-root", default="/srv/nas", help="Local directory to browse (default: /srv/nas)")
     args = parser.parse_args()
     
-    app = PCloudCommander(cfg_overrides={"env_file": args.env_file} if args.env_file else None)
+    app = PCloudCommander(
+        cfg_overrides={"env_file": args.env_file} if args.env_file else None,
+        local_root=args.local_root,
+    )
     app.run()
