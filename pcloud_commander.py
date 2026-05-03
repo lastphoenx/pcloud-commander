@@ -9,6 +9,7 @@ Based on pcloud_bin_lib.py and Textual.
 import os
 import sys
 import argparse
+import threading
 from pathlib import Path
 from typing import Optional, List
 
@@ -73,12 +74,67 @@ from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, DataTable, Static, DirectoryTree, Label
 from textual.containers import Container, Horizontal, Vertical
 from textual.binding import Binding
+from textual.screen import ModalScreen
+from textual.widgets import Button
+
+
+DEFAULT_DOWNLOAD_DIR = "/srv/nas/restore"
+
+
+class ConfirmModal(ModalScreen):
+    """Einfaches Ja/Nein-Popup."""
+
+    CSS = """
+    ConfirmModal {
+        align: center middle;
+    }
+    #confirm-box {
+        width: 60;
+        height: 9;
+        border: double #f1c40f;
+        background: #1a1a2e;
+        padding: 1 2;
+    }
+    #confirm-msg {
+        height: 3;
+        color: #ffffff;
+        text-align: center;
+    }
+    #confirm-buttons {
+        align: center middle;
+        height: 3;
+    }
+    Button {
+        margin: 0 2;
+    }
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self.message = message
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-box"):
+            yield Static(self.message, id="confirm-msg")
+            with Horizontal(id="confirm-buttons"):
+                yield Button("Yes [F8]", variant="error", id="btn-yes")
+                yield Button("No  [Esc]", variant="primary", id="btn-no")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "btn-yes")
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(False)
+        elif event.key == "f8":
+            self.dismiss(True)
+
 
 class PCloudCommander(App):
     """pCloud Commander TUI."""
     
     TITLE = "pCloud Commander"
-    SUB_TITLE = "Interactive File Browser"
+    SUB_TITLE = "Interactive Dual-Pane Browser"
     
     BINDINGS = [
         Binding("q", "quit", "Quit"),
@@ -86,27 +142,45 @@ class PCloudCommander(App):
         Binding("backspace", "up", "Go Up"),
         Binding("u", "up", "Go Up"),
         Binding("tab", "switch_pane", "Switch Pane"),
+        Binding("d", "download", "Download", show=True),
+        Binding("f8", "delete", "Delete", show=True),
     ]
     
     CSS = """
     #left-pane, #right-pane {
         width: 1fr;
         height: 1fr;
-        border: solid #555555;
+        border: solid #34495e;
     }
     #left-pane.active-pane, #right-pane.active-pane {
-        border: solid #f1c40f;
+        border: bold #f1c40f;
     }
-    #left-pane Label {
+    
+    /* Panel Headers */
+    .panel-label {
         height: 1;
-        background: #2c3e50;
-        color: #f1c40f;
+        background: #34495e;
+        color: #ffffff;
         padding: 0 1;
         text-style: bold;
     }
+    .active-pane .panel-label {
+        background: #f1c40f;
+        color: #000000;
+    }
+
+    /* DirectoryTree (Local) */
     DirectoryTree {
         height: 1fr;
+        background: $surface;
     }
+    DirectoryTree > .directory-tree--cursor {
+        background: #f1c40f;
+        color: #000000;
+        text-style: bold;
+    }
+
+    /* DataTable (pCloud) */
     DataTable {
         height: 1fr;
     }
@@ -115,6 +189,8 @@ class PCloudCommander(App):
         color: #000000;
         text-style: bold;
     }
+
+    /* Path & Status Bars */
     #path-bar {
         height: 1;
         background: #f1c40f;
@@ -124,33 +200,36 @@ class PCloudCommander(App):
     }
     #status-bar {
         height: 1;
-        background: #34495e;
-        color: #ffffff;
+        background: #2c3e50;
+        color: #bdc3c7;
         padding: 0 1;
         text-style: italic;
     }
     """
 
-    def __init__(self, cfg_overrides=None, local_root: str = "/srv/nas"):
+    def __init__(self, cfg_overrides=None, local_root: str = "/srv"):
         super().__init__()
         self.env_file = find_env_file()
         self.cfg = pc.effective_config(env_file=self.env_file, overrides=cfg_overrides)
         self.current_folderid = 0
         self.history: List[tuple[int, str]] = []
         self.current_path_str = "/"
-        self.local_root = local_root if Path(local_root).exists() else str(Path.home())
-        self.active_pane = "right"  # right = pCloud, left = local
+        # Fallback auf / falls /srv nicht existiert (lokale Entwicklung)
+        self.local_root = local_root if Path(local_root).exists() else "/"
+        self.active_pane = "right"  # Startfokus auf pCloud
+        self.download_dir = DEFAULT_DOWNLOAD_DIR
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static("", id="path-bar")
         yield Horizontal(
             Vertical(
-                Label(f"📁 Local: {self.local_root}"),
+                Label(f"📁 Local: {self.local_root}", classes="panel-label"),
                 DirectoryTree(self.local_root),
                 id="left-pane",
             ),
             Vertical(
+                Label("☁  pCloud: /", classes="panel-label", id="pcloud-label"),
                 DataTable(cursor_type="row"),
                 id="right-pane",
             ),
@@ -184,8 +263,12 @@ class PCloudCommander(App):
         table = self.query_one(DataTable)
         table.clear()
         
+        # Pfad-Anzeige aktualisieren
         path_bar = self.query_one("#path-bar", Static)
-        path_bar.update(f"☁  pCloud: {self.current_path_str}")
+        path_bar.update(f"Current Path: {self.current_path_str}")
+        
+        pcloud_label = self.query_one("#pcloud-label", Label)
+        pcloud_label.update(f"☁  pCloud: {self.current_path_str}")
 
         try:
             res = pc.listfolder(self.cfg, folderid=self.current_folderid)
@@ -228,13 +311,94 @@ class PCloudCommander(App):
             # Es ist eine Datei
             self.notify(f"File selected: {name_with_icon}", severity="information")
 
+    def _get_selected_row(self):
+        """Gibt (name_raw, item_id, is_folder) der aktuell markierten Zeile zurück."""
+        table = self.query_one(DataTable)
+        if table.cursor_row is None or table.row_count == 0:
+            return None, None, None
+        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+        row_data = table.get_row(row_key)
+        name_with_icon = str(row_data[0])
+        item_id = int(row_data[3])
+        is_folder = "📁" in name_with_icon
+        name_raw = name_with_icon.replace("📁 ", "").replace("📄 ", "").rstrip("/")
+        return name_raw, item_id, is_folder
+
+    def action_download(self) -> None:
+        """d — Markierte Datei nach DEFAULT_DOWNLOAD_DIR herunterladen."""
+        if self.active_pane != "right":
+            self.notify("Switch to pCloud pane to download.", severity="warning")
+            return
+        name_raw, item_id, is_folder = self._get_selected_row()
+        if name_raw is None:
+            self.notify("No file selected.", severity="warning")
+            return
+        if is_folder:
+            self.notify("Cannot download a folder (select a file).", severity="warning")
+            return
+
+        dest_dir = Path(self.download_dir)
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            self.notify(f"Cannot create download dir: {e}", severity="error")
+            return
+
+        local_path = str(dest_dir / name_raw)
+        self.notify(f"⬇ Downloading {name_raw} …", timeout=10)
+
+        def _run():
+            try:
+                pc.download_binaryfile_to(self.cfg, fileid=item_id, local_path=local_path)
+                self.call_from_thread(
+                    self.notify, f"✓ Saved to {local_path}", severity="information", timeout=8
+                )
+            except Exception as e:
+                self.call_from_thread(
+                    self.notify, f"✗ Download failed: {e}", severity="error", timeout=10
+                )
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def action_delete(self) -> None:
+        """F8 — Markiertes Element nach Bestätigung löschen."""
+        if self.active_pane != "right":
+            self.notify("Switch to pCloud pane to delete.", severity="warning")
+            return
+        name_raw, item_id, is_folder = self._get_selected_row()
+        if name_raw is None:
+            self.notify("No item selected.", severity="warning")
+            return
+
+        kind = "folder (recursive)" if is_folder else "file"
+        msg = f"Delete {kind}:\n{name_raw}?"
+
+        def _on_confirm(confirmed: bool) -> None:
+            if not confirmed:
+                return
+            try:
+                if is_folder:
+                    pc.deletefolder_recursive(self.cfg, folderid=item_id)
+                else:
+                    pc.deletefile(self.cfg, fileid=item_id)
+                self.notify(f"✓ Deleted: {name_raw}", severity="information")
+                self.refresh_list()
+            except Exception as e:
+                self.notify(f"✗ Delete failed: {e}", severity="error", timeout=10)
+
+        self.push_screen(ConfirmModal(msg), _on_confirm)
+
+
     def action_up(self):
         """Eine Ebene nach oben gehen."""
-        if self.history:
+        if self.active_pane == "right" and self.history:
             prev_folderid, _ = self.history.pop()
             self.current_folderid = prev_folderid
             self._update_path_str()
             self.refresh_list()
+        elif self.active_pane == "left":
+            # DirectoryTree hat eigene Navigation, aber wir könnten hier '..' Logik einbauen
+            pass
         else:
             self.notify("Already at root.", severity="warning")
 
@@ -259,11 +423,14 @@ class PCloudCommander(App):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--env-file", help="Path to .env file")
-    parser.add_argument("--local-root", default="/srv/nas", help="Local directory to browse (default: /srv/nas)")
+    parser.add_argument("--local-root", default="/srv", help="Local directory to browse (default: /srv)")
+    parser.add_argument("--download-dir", default=DEFAULT_DOWNLOAD_DIR,
+                        help=f"Local download target (default: {DEFAULT_DOWNLOAD_DIR})")
     args = parser.parse_args()
     
     app = PCloudCommander(
         cfg_overrides={"env_file": args.env_file} if args.env_file else None,
         local_root=args.local_root,
     )
+    app.download_dir = args.download_dir
     app.run()
