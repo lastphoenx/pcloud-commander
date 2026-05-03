@@ -30,4 +30,4 @@ fi
 
 # === App starten ===
 echo -e "${GREEN}Starting pCloud Commander...${NC}"
-python3 "$SCRIPT_DIR/pcloud_commander.py" "$@"
+COLORTERM="${COLORTERM:-truecolor}" TERM="${TERM:-xterm-256color}" python3 "$SCRIPT_DIR/pcloud_commander.py" "$@"
