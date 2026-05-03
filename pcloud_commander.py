@@ -910,8 +910,10 @@ class ScriptDashboardScreen(ModalScreen):
                 name = script.get("name", "?")
                 risk = script.get("risk_level", "")
                 dur = script.get("estimated_duration", "")
+                risk_txt = str(risk).lower().strip()
+                danger_prefix = "[HIGH-RISK] " if risk_txt == "high" else ""
                 badge = f"  [dim]{risk}  {dur}[/dim]" if (risk or dur) else ""
-                lv.append(ListItem(Static(f"  {name}{badge}")))
+                lv.append(ListItem(Static(f"  {danger_prefix}{name}{badge}")))
                 self._entries.append({"type": "script", "catalog_idx": catalog_idx})
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
@@ -938,6 +940,7 @@ class ScriptDashboardScreen(ModalScreen):
             if isinstance(p, dict) and not p.get("ui_only") and p.get("name")
         ]
         cmd_preview = str(script.get("cmd", ""))
+        warning = "\n[bold]WARNING:[/bold] High-risk script. Review parameters before start." if str(risk).lower() == "high" else ""
         detail.update(
             f"[bold]{name}[/bold]\n\n"
             f"{desc}\n\n"
@@ -945,6 +948,7 @@ class ScriptDashboardScreen(ModalScreen):
             f"[dim]Tags:[/dim] {tags}\n"
             f"[dim]Params:[/dim] {len(params)}    "
             f"[dim]CMD:[/dim] ...{cmd_preview[-30:] if len(cmd_preview) > 30 else cmd_preview}"
+            f"{warning}"
         )
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
@@ -1018,11 +1022,14 @@ class ScriptFormScreen(ModalScreen):
         desc = self.script.get("description", "")
         risk = self.script.get("risk_level", "-")
         dur = self.script.get("estimated_duration", "-")
+        high_risk = str(risk).lower().strip() == "high"
 
         with Vertical(id="form-box"):
             yield Static(f" {name}", id="form-title")
             yield Static(f" {desc}", id="form-desc")
             yield Static(f" Risk: {risk}   Duration: {dur}   F10=Run", id="form-badges")
+            if high_risk:
+                yield Static(" WARNING: HIGH-RISK script. Verify all options carefully.", classes="param-help")
             yield Static("", id="form-divider")
             with VerticalScroll(id="form-params"):
                 for param in self._params:
@@ -1592,6 +1599,52 @@ class PCloudCommander(App):
                 cmd.extend([flag_for(pname), str(value)])
         return cmd
 
+    @staticmethod
+    def _is_high_risk_script(script: Dict[str, Any]) -> bool:
+        risk = str(script.get("risk_level", "")).lower().strip()
+        tags = [str(t).lower().strip() for t in (script.get("tags") or [])]
+        name = str(script.get("name", "")).lower()
+        return (
+            risk == "high"
+            or "high-risk" in tags
+            or "prepare fresh test" in name
+            or "rtb backup" in name
+        )
+
+    @staticmethod
+    def _normalize_bool_param_keys(params: Dict[str, Any]) -> Dict[str, str]:
+        key_map: Dict[str, str] = {}
+        for key in params:
+            k = str(key).lower().replace("_", "-")
+            key_map[k] = key
+        return key_map
+
+    def _apply_high_risk_safety_defaults(
+        self, script: Dict[str, Any], user_params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Enforce safe defaults for dangerous scripts (dry-run on, execute off)."""
+        out = dict(user_params)
+        if not self._is_high_risk_script(script):
+            return out
+
+        key_map = self._normalize_bool_param_keys(out)
+        dry_key = key_map.get("dry-run")
+        execute_key = key_map.get("execute")
+
+        if dry_key is not None and execute_key is not None:
+            # If execute is selected, dry-run must be off. Else safe default is dry-run on.
+            if bool(out.get(execute_key)):
+                out[dry_key] = False
+            else:
+                out[dry_key] = True
+                out[execute_key] = False
+        elif dry_key is not None:
+            # Keep dry-run explicitly on by default for high-risk scripts.
+            if out.get(dry_key) is None:
+                out[dry_key] = True
+
+        return out
+
     def _handle_quick_action(self, cmd_key: str, local_sel: Optional[str]) -> None:
         if cmd_key == "refresh":
             self.refresh_list()
@@ -1609,8 +1662,9 @@ class PCloudCommander(App):
     ) -> None:
         script_name = str(script.get("name", "Unnamed Script"))
         cwd = str(script.get("cwd") or ".")
+        safe_params = self._apply_high_risk_safety_defaults(script, user_params)
         try:
-            cmd = self._build_command_from_user_params(script, user_params)
+            cmd = self._build_command_from_user_params(script, safe_params)
         except Exception as e:
             self.notify(f"Cannot build command for {script_name}: {e}", severity="error")
             return
@@ -1639,6 +1693,22 @@ class PCloudCommander(App):
                 subprocess.run(cmd, cwd=cwd, env=env)
                 input("\nPress Enter to return to Commander...")
             self.refresh_list()
+
+        if self._is_high_risk_script(script):
+            msg = (
+                "HIGH-RISK script selected:\n"
+                f"{script_name}\n\n"
+                "No action starts on selection.\n"
+                "You are about to execute the configured command.\n\n"
+                "Proceed?"
+            )
+
+            def _on_confirm(confirmed: bool) -> None:
+                if confirmed:
+                    run_in_suspend()
+
+            self.push_screen(ConfirmModal(msg), _on_confirm)
+            return
 
         run_in_suspend()
 
