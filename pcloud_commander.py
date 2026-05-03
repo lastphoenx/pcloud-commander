@@ -153,7 +153,7 @@ class PCloudCommander(App):
         border: solid #34495e;
     }
     #left-pane.active-pane, #right-pane.active-pane {
-        border: bold #f1c40f;
+        border: thick #f1c40f;
     }
     
     /* Panel Headers */
