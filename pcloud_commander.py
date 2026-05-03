@@ -17,6 +17,7 @@ import argparse
 import threading
 import subprocess
 import shutil
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Any, Dict
@@ -740,8 +741,9 @@ class PathBrowserScreen(ModalScreen):
         Binding("f5", "new_folder", "Neuer Ordner"),
     ]
 
-    def __init__(self, start_path: str = "/") -> None:
+    def __init__(self, start_path: str = "/", folder_only: bool = False) -> None:
         super().__init__()
+        self.folder_only = folder_only
         p = Path(start_path)
         if p.is_file():
             p = p.parent
@@ -760,7 +762,10 @@ class PathBrowserScreen(ModalScreen):
             yield RobustDirectoryTree(self.start_path, id="browser-tree")
 
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
-        self.dismiss(str(event.path))
+        if self.folder_only:
+            self.dismiss(str(event.path.parent))
+        else:
+            self.dismiss(str(event.path))
 
     def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
         self._current_dir = str(event.path)
@@ -815,9 +820,10 @@ class PCloudBrowserScreen(ModalScreen):
         Binding("space", "select_current", "Auswählen"),
     ]
 
-    def __init__(self, cfg: Any) -> None:
+    def __init__(self, cfg: Any, folder_only: bool = False) -> None:
         super().__init__()
         self.cfg = cfg
+        self.folder_only = folder_only
         self._current_path = "/"
 
     def compose(self) -> ComposeResult:
@@ -885,8 +891,15 @@ class PCloudBrowserScreen(ModalScreen):
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         node = event.node
         if node and node.data and isinstance(node.data, dict):
-            if not node.data.get("is_folder"):
-                self.dismiss(self._node_path(node))
+            if node.data.get("is_folder"):
+                if self.folder_only:
+                    self.dismiss(self._node_path(node))
+            else:
+                if self.folder_only:
+                    parent = node.parent
+                    self.dismiss(self._node_path(parent) if parent else "/")
+                else:
+                    self.dismiss(self._node_path(node))
 
     def action_select_current(self) -> None:
         self.dismiss(self._current_path)
@@ -1343,6 +1356,7 @@ class PCloudCommander(App):
         self.download_dir = DEFAULT_DOWNLOAD_DIR
         self._palette_name = palette_name
         self.palette = PALETTES.get(palette_name, PALETTES[DEFAULT_PALETTE])
+        self._status_base = f"Lib: {pc_path} | Env: {self.env_file}"
         self.script_catalog_error = ""
         self.script_catalog = self._load_external_script_catalog()
 
@@ -1376,7 +1390,7 @@ class PCloudCommander(App):
                 id="right-pane",
             ),
         )
-        yield Static(f"Lib: {pc_path} | Env: {self.env_file}", id="status-bar")
+        yield Static(self._status_base, id="status-bar")
         yield Footer()
 
     # ── pCloud tree ──────────────────────────────────────────────
@@ -1393,11 +1407,30 @@ class PCloudCommander(App):
         label.append(name, style=f"bold {self.palette.folder}")
         return label
 
-    def _file_label(self, name: str, size_str: str) -> Text:
+    def _file_label(self, name: str, size_str: str, mtime_str: str = "") -> Text:
         label = Text("📄 ", style=self.palette.file)
         label.append(name, style=self.palette.file)
         label.append(f"  [{size_str}]", style=self.palette.text_muted)
+        if mtime_str:
+            label.append(f"  [{mtime_str}]", style=self.palette.text_muted)
         return label
+
+    def _format_mtime(self, value: Any) -> str:
+        if value in (None, "", 0):
+            return ""
+        try:
+            if isinstance(value, (int, float)):
+                return datetime.fromtimestamp(float(value)).strftime("%Y-%m-%d %H:%M")
+            s = str(value).strip()
+            if s.isdigit():
+                return datetime.fromtimestamp(float(s)).strftime("%Y-%m-%d %H:%M")
+            return s
+        except Exception:
+            return ""
+
+    def _set_status_detail(self, text: str = "") -> None:
+        suffix = f" | {text}" if text else ""
+        self.query_one("#status-bar", Static).update(self._status_base + suffix)
 
     def _load_tree_node(self, node, folderid: int) -> None:
         try:
@@ -1414,8 +1447,9 @@ class PCloudCommander(App):
                         child.add_leaf("⋯", data=None)
                     else:
                         size_str = self._format_size(item["size"])
+                        mtime_str = self._format_mtime(item.get("modified", ""))
                         node.add_leaf(
-                            self._file_label(item["name"], size_str),
+                            self._file_label(item["name"], size_str, mtime_str),
                             data={"id": item["fileid"], "is_folder": False,
                                   "name": item["name"], "size": item["size"],
                                   "mtime": item.get("modified", "")},
@@ -1483,10 +1517,24 @@ class PCloudCommander(App):
                 p_str = self._node_path_str(node)
                 self.query_one("#path-bar", Static).update(f"pCloud: {p_str}")
                 self.query_one("#pcloud-label", Label).update(f"☁  pCloud: {p_str}")
+                if node.data.get("is_folder"):
+                    self._set_status_detail(f"pCloud folder: {p_str}")
+                else:
+                    size = self._format_size(node.data.get("size", 0))
+                    mtime = self._format_mtime(node.data.get("mtime", ""))
+                    self._set_status_detail(f"pCloud file: {size} | mtime: {mtime or '-'}")
         elif isinstance(event.control, RobustDirectoryTree):
             if event.node and event.node.data:
                 p_obj = getattr(event.node.data, "path", event.node.data)
                 self.query_one("#path-bar", Static).update(f"Local: {p_obj}")
+                p = Path(str(p_obj))
+                try:
+                    st = p.stat()
+                    size = self._format_size(st.st_size) if p.is_file() else "dir"
+                    mtime = self._format_mtime(st.st_mtime)
+                    self._set_status_detail(f"Local: {size} | mtime: {mtime or '-'}")
+                except Exception:
+                    self._set_status_detail("")
 
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         self.notify(f"📄 {event.path.name}  │  a=actions", severity="information")
@@ -1675,6 +1723,15 @@ class PCloudCommander(App):
         except Exception:
             pass
 
+    def _is_within_local_root(self, path: Path) -> bool:
+        try:
+            root = Path(self.local_root).resolve()
+            target = path.resolve()
+            target.relative_to(root)
+            return True
+        except Exception:
+            return False
+
     def _local_selected_path(self) -> Optional[Path]:
         try:
             tree = self.query_one(RobustDirectoryTree)
@@ -1804,6 +1861,9 @@ class PCloudCommander(App):
                         return
                     try:
                         dest_dir = Path(dest_text)
+                        if not self._is_within_local_root(dest_dir):
+                            self.notify(f"Destination must stay inside {self.local_root}", severity="warning")
+                            return
                         dest_dir.mkdir(parents=True, exist_ok=True)
                         if cmd_key == "local_copy":
                             if src.is_dir():
@@ -1818,9 +1878,11 @@ class PCloudCommander(App):
                     except Exception as e:
                         self.notify(f"Local operation failed: {e}", severity="error")
 
-                default_dest = str(src.parent)
-                prompt = "Destination local folder"
-                self.push_screen(TextInputModal(prompt, "/path/to/folder", default_dest), _on_dest)
+                start_dest = str(src.parent if self._is_within_local_root(src.parent) else Path(self.local_root))
+                self.push_screen(
+                    PathBrowserScreen(start_path=start_dest, folder_only=True),
+                    _on_dest,
+                )
                 return
 
             # pCloud ops
@@ -1846,6 +1908,9 @@ class PCloudCommander(App):
 
             if cmd_key == "pcloud_delete":
                 target = info
+                if target["is_folder"] and int(target.get("id", 0)) == 0:
+                    self.notify("Root folder cannot be deleted.", severity="warning")
+                    return
                 kind = "folder (recursive)" if target["is_folder"] else "file"
                 def _on_confirm(confirmed: bool) -> None:
                     if not confirmed:
@@ -1864,7 +1929,6 @@ class PCloudCommander(App):
 
             if cmd_key in {"pcloud_copy", "pcloud_move"}:
                 target = info
-                default_dest = str(target["parent_path"]).rstrip("/") or "/"
                 def _on_dest(dest_folder: Optional[str]) -> None:
                     if not dest_folder:
                         return
@@ -1890,8 +1954,10 @@ class PCloudCommander(App):
                     except Exception as e:
                         self.notify(f"pCloud operation failed: {e}", severity="error")
 
-                prompt = "Destination pCloud folder path"
-                self.push_screen(TextInputModal(prompt, "/Backup/target", default_dest), _on_dest)
+                self.push_screen(
+                    PCloudBrowserScreen(cfg=self.cfg, folder_only=True),
+                    _on_dest,
+                )
                 return
 
         self.push_screen(ActionMenu(actions), _on_action)
