@@ -94,13 +94,13 @@ class ConfirmModal(ModalScreen):
     #confirm-box {
         width: 60;
         height: 11;
-        border: double #ff00ff;
-        background: #1a1a1a;
+        border: double #00b5cc;
+        background: #111111;
         padding: 1 2;
     }
     #confirm-msg {
         height: 4;
-        color: #ffffff;
+        color: #e0e0e0;
         text-align: center;
         text-style: bold;
     }
@@ -113,12 +113,12 @@ class ConfirmModal(ModalScreen):
         margin: 0 2;
     }
     #btn-yes {
-        background: #ff00ff;
-        color: #000000;
+        background: #e74c3c;
+        color: #ffffff;
     }
     #btn-no {
-        background: #333333;
-        color: #ffffff;
+        background: #444444;
+        color: #e0e0e0;
     }
     """
 
@@ -156,21 +156,21 @@ class ActionMenu(ModalScreen):
         width: 70;
         height: auto;
         max-height: 25;
-        border: double #ff79c6; /* Neon Magenta */
-        background: #1e1e1e;
+        border: double #00b5cc;
+        background: #111111;
         padding: 1 2;
     }
     #menu-title {
         height: 1;
         margin-bottom: 1;
-        color: #f1c40f; /* Yellow */
+        color: #f1c40f;
         text-align: center;
         text-style: bold;
     }
     OptionList {
-        background: #1e1e1e;
-        color: #a9b1d6;
-        border: solid #333333;
+        background: #111111;
+        color: #c0c0c0;
+        border: solid #2d2d2d;
     }
     OptionList > .option-list--cursor {
         background: #f1c40f;
@@ -187,12 +187,12 @@ class ActionMenu(ModalScreen):
         border: none;
     }
     #btn-run {
-        background: #50fa7b; /* Green */
-        color: #000000;
+        background: #27ae60;
+        color: #ffffff;
     }
     #btn-cancel {
-        background: #ff5555; /* Red */
-        color: #000000;
+        background: #555555;
+        color: #e0e0e0;
     }
     """
 
@@ -249,94 +249,94 @@ class PCloudCommander(App):
     
     CSS = """
     Screen {
-        background: #000000;
-        color: #ffffff;
+        background: #0d0d0d;
+        color: #e0e0e0;
     }
 
     #left-pane, #right-pane {
         width: 1fr;
         height: 1fr;
-        border: solid #333333;
-        background: #000000;
+        border: solid #2d2d2d;
+        background: #0d0d0d;
     }
     #left-pane.active-pane, #right-pane.active-pane {
-        border: double #00ffff; /* Neon Cyan for active pane */
+        border: double #00b5cc;
     }
-    
+
     /* Panel Headers */
     .panel-label {
         height: 1;
         background: #1a1a1a;
-        color: #aaaaaa;
+        color: #888888;
         padding: 0 1;
         text-style: bold;
     }
     .active-pane .panel-label {
-        background: #f1c40f; /* Yellow for active header */
-        color: #000000;
+        background: #1a1a1a;
+        color: #00b5cc;
     }
 
     /* DirectoryTree (Local) */
     DirectoryTree {
         height: 1fr;
-        background: #000000;
-        color: #ffffff;
+        background: #0d0d0d;
+        color: #c0c0c0;
     }
     DirectoryTree > .directory-tree--cursor {
-        background: #f1c40f; /* Yellow cursor */
+        background: #f1c40f;
         color: #000000;
         text-style: bold;
     }
     DirectoryTree > .directory-tree--file {
-        color: #50fa7b; /* Neon Green for Files */
+        color: #7ec8a0;
     }
     DirectoryTree > .directory-tree--folder {
-        color: #bd93f9; /* Purple for Folders */
+        color: #9d84c7;
         text-style: bold;
     }
 
     /* pCloud Tree (right pane) */
     #pcloud-tree {
         height: 1fr;
-        background: #000000;
-        color: #ffffff;
+        background: #0d0d0d;
+        color: #c0c0c0;
     }
     #pcloud-tree > .tree--cursor {
-        background: #f1c40f; /* Yellow cursor */
+        background: #f1c40f;
         color: #000000;
         text-style: bold;
     }
     #pcloud-tree .tree--guides {
-        color: #444444;
+        color: #3a3a3a;
     }
     #pcloud-tree .tree--label {
-        color: #ffffff;
+        color: #c0c0c0;
     }
 
     /* Path & Status Bars */
     #path-bar {
         height: 1;
-        background: #f1c40f; /* Solid Yellow bar */
-        color: #000000;
+        background: #1a1a1a;
+        color: #f1c40f;
         padding: 0 1;
         text-style: bold;
     }
     #status-bar {
         height: 1;
-        background: #1a1a1a;
-        color: #ff79c6; /* Neon Pink */
+        background: #111111;
+        color: #666666;
         padding: 0 1;
         text-style: italic;
     }
 
-    /* ActionMenu Style Fixes */
+    /* ActionMenu Style Fixes (override modal CSS) */
     #menu-box {
-        border: double #00ffff;
-        background: #000000;
+        border: double #00b5cc;
+        background: #111111;
     }
     OptionList {
-        background: #000000;
-        color: #ffffff;
+        background: #111111;
+        color: #c0c0c0;
     }
     OptionList > .option-list--cursor {
         background: #f1c40f;
@@ -460,8 +460,10 @@ class PCloudCommander(App):
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         """Pfad-Bar beim Cursor-Bewegen aktualisieren."""
+        if event.control.id != "pcloud-tree":
+            return
         node = event.node
-        if node and node.data:
+        if node and node.data and isinstance(node.data, dict):
             path = self._node_path_str(node)
             self.query_one("#path-bar", Static).update(f"pCloud: {path}")
             self.query_one("#pcloud-label", Label).update(f"☁  pCloud: {path}")
