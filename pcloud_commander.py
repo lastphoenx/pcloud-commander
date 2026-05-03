@@ -834,6 +834,7 @@ class PCloudBrowserScreen(ModalScreen):
         Binding("space", "select_current", "Auswählen"),
         Binding("backspace", "go_up", "Hoch"),
         Binding("u", "go_up", "Hoch"),
+        Binding("f5", "new_folder", "Neuer Ordner"),
     ]
 
     def __init__(self, cfg: Any, folder_only: bool = False) -> None:
@@ -845,7 +846,7 @@ class PCloudBrowserScreen(ModalScreen):
     def compose(self) -> ComposeResult:
         with Vertical(id="path-browser-box"):
             yield Static(
-                "  ☁ pCloud-Pfad wählen   ↑↓ navigieren  Space/Enter=auswählen  Esc=abbrechen",
+                "  ☁ pCloud-Pfad wählen   ↑↓ navigieren  Space/Enter=auswählen  F5=Neuer Ordner  Esc=abbrechen",
                 id="browser-title",
             )
             yield Static("/", id="browser-current")
@@ -931,6 +932,33 @@ class PCloudBrowserScreen(ModalScreen):
             tree.move_cursor(tree.root)
             self._current_path = "/"
             self.query_one("#browser-current", Static).update("/")
+
+    def action_new_folder(self) -> None:
+        tree = self.query_one("#pcloud-browse-tree", Tree)
+        node = tree.cursor_node or tree.root
+        if node and node.data and isinstance(node.data, dict):
+            if not node.data.get("is_folder") and node.parent is not None:
+                node = node.parent
+        base_path = self._node_path(node) if node else self._current_path or "/"
+
+        def _on_name(name: Optional[str]) -> None:
+            if not name:
+                return
+            try:
+                new_path = base_path.rstrip("/") + "/" + name if base_path != "/" else "/" + name
+                pc.createfolder(self.cfg, new_path)
+                # Force reload of current folder to show new entry.
+                if node and node.data:
+                    node.data["loaded"] = False
+                    node.remove_children()
+                    self._load_node(node, int(node.data.get("id", 0)))
+                    node.expand()
+                self._current_path = new_path
+                self.query_one("#browser-current", Static).update(new_path)
+            except Exception as e:
+                self.query_one("#browser-current", Static).update(f"Fehler: {e}")
+
+        self.app.push_screen(TextInputModal("Neuer pCloud-Unterordner", "folder-name"), _on_name)
 
     def action_dismiss_screen(self) -> None:
         self.dismiss(None)
