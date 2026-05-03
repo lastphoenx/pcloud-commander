@@ -9,8 +9,7 @@ Based on pcloud_bin_lib.py and Textual.
 import os
 import sys
 import argparse
-from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, List
 
 # ==================== Library Loading ====================
 
@@ -70,28 +69,41 @@ if not pc:
 # ==================== Textual UI ====================
 
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, DataTable, Static, Label
-from textual.containers import Container, Vertical
+from textual.widgets import Header, Footer, DataTable, Static
+from textual.containers import Container
+from textual.binding import Binding
 
 class PCloudCommander(App):
     """pCloud Commander TUI."""
     
     TITLE = "pCloud Commander"
     SUB_TITLE = "Interactive File Browser"
+    
     BINDINGS = [
-        ("q", "quit", "Quit"),
-        ("r", "refresh", "Refresh"),
+        Binding("q", "quit", "Quit"),
+        Binding("r", "refresh", "Refresh"),
+        Binding("backspace", "up", "Go Up"),
+        Binding("u", "up", "Go Up"),
     ]
+    
     CSS = """
     DataTable {
         height: 1fr;
-        border: solid green;
+        border: solid $primary;
+    }
+    #path-bar {
+        height: 1;
+        background: $primary-darken-2;
+        color: $text;
+        padding: 0 1;
+        text-style: bold;
     }
     #status-bar {
         height: 1;
-        background: $accent;
-        color: white;
+        background: #2c3e50;
+        color: #ecf0f1;
         padding: 0 1;
+        text-style: italic;
     }
     """
 
@@ -100,10 +112,12 @@ class PCloudCommander(App):
         self.env_file = find_env_file()
         self.cfg = pc.effective_config(env_file=self.env_file, overrides=cfg_overrides)
         self.current_folderid = 0
-        self.history = []
+        self.history: List[tuple[int, str]] = []  # Stack von (folderid, name)
+        self.current_path_str = "/"
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield Static(self.current_path_str, id="path-bar")
         yield Container(
             DataTable(cursor_type="row"),
             id="main-container"
@@ -120,6 +134,10 @@ class PCloudCommander(App):
         table = self.query_one(DataTable)
         table.clear()
         
+        # Pfad-Anzeige aktualisieren
+        path_bar = self.query_one("#path-bar", Static)
+        path_bar.update(f"📂 {self.current_path_str}")
+
         try:
             res = pc.listfolder(self.cfg, folderid=self.current_folderid)
             if res.get("result") == 0:
@@ -139,11 +157,46 @@ class PCloudCommander(App):
                         item_id = item["fileid"]
                     
                     mtime = item.get("modified", "")
-                    table.add_row(name, size, mtime, str(item_id))
+                    table.add_row(name, size, mtime, str(item_id), key=str(item_id))
             else:
                 self.notify(f"API Error: {res.get('error')}", severity="error")
         except Exception as e:
             self.notify(f"Connection Error: {str(e)}", severity="error")
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected):
+        """Navigation beim Drücken von Enter."""
+        row_data = self.query_one(DataTable).get_row(event.row_key)
+        name_with_icon = str(row_data[0])
+        item_id = int(row_data[3])
+        
+        if "📁" in name_with_icon:
+            # Es ist ein Ordner
+            folder_name = name_with_icon.replace("📁 ", "").rstrip("/")
+            self.history.append((self.current_folderid, folder_name))
+            self.current_folderid = item_id
+            self._update_path_str()
+            self.refresh_list()
+        else:
+            # Es ist eine Datei
+            self.notify(f"File selected: {name_with_icon}", severity="information")
+
+    def action_up(self):
+        """Eine Ebene nach oben gehen."""
+        if self.history:
+            prev_folderid, _ = self.history.pop()
+            self.current_folderid = prev_folderid
+            self._update_path_str()
+            self.refresh_list()
+        else:
+            self.notify("Already at root.", severity="warning")
+
+    def _update_path_str(self):
+        """Baut den Pfad-String aus der History."""
+        if not self.history:
+            self.current_path_str = "/"
+        else:
+            names = [h[1] for h in self.history]
+            self.current_path_str = "/" + "/".join(names) + "/"
 
     def _format_size(self, size):
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
