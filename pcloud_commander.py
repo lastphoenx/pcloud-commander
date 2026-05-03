@@ -522,21 +522,19 @@ CUSTOM_CSS = """
         background: $surface;
         border: none;
     }
-    .bool-set RadioButton {
-        height: 1;
-        padding: 0 2;
+    .bool-yes, .bool-no {
+        height: 3;
+        padding: 0 3;
         width: auto;
     }
-    .bool-set RadioButton.-on Label {
+    /* ausgewählt: voller farbiger Hintergrund wie Start Script / Cancel */
+    .bool-yes.-on {
+        background: $success;
         text-style: bold;
     }
-    /* "Ja" RadioButton (index 0) */
-    .bool-set RadioButton:first-child.-on {
-        color: $success;
-    }
-    /* "Nein" RadioButton (index 1) */
-    .bool-set RadioButton:last-child.-on {
-        color: $error;
+    .bool-no.-on {
+        background: $error;
+        text-style: bold;
     }
 
     /* ── Path row (input + browse button) ───────────────────────── */
@@ -554,8 +552,8 @@ CUSTOM_CSS = """
         background: $panel;
     }
 
-    /* ── Path Browser ────────────────────────────────────────────── */
-    PathBrowserScreen {
+    /* ── Path Browser (lokal + pCloud) ────────────────────────── */
+    PathBrowserScreen, PCloudBrowserScreen {
         align: center middle;
         background: rgba(0, 0, 0, 0.85);
     }
@@ -650,12 +648,43 @@ class ActionMenu(ModalScreen):
 # ==================== Path Browser ====================
 
 
+class NewFolderScreen(ModalScreen):
+    """Kleines Popup um einen neuen Ordnernamen einzugeben."""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-box"):
+            yield Static("Neuen Ordner erstellen", id="confirm-msg")
+            yield Input(placeholder="Ordnername", id="newfolder-input")
+            with Horizontal(id="confirm-buttons"):
+                yield Button("Erstellen [Enter]", id="btn-yes")
+                yield Button("Abbrechen [Esc]", id="btn-no")
+
+    def on_mount(self) -> None:
+        self.query_one("#newfolder-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        name = event.value.strip()
+        self.dismiss(name if name else None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-yes":
+            name = self.query_one("#newfolder-input", Input).value.strip()
+            self.dismiss(name if name else None)
+        else:
+            self.dismiss(None)
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(None)
+
+
 class PathBrowserScreen(ModalScreen):
-    """Lokaler Datei-Browser zur Pfadauswahl. Space/Enter = auswählen, Esc = abbrechen."""
+    """Lokaler Datei-Browser zur Pfadauswahl."""
 
     BINDINGS = [
         Binding("escape", "dismiss_screen", "Abbrechen"),
         Binding("space", "select_current", "Auswählen"),
+        Binding("f5", "new_folder", "Neuer Ordner"),
     ]
 
     def __init__(self, start_path: str = "/") -> None:
@@ -666,11 +695,12 @@ class PathBrowserScreen(ModalScreen):
         while str(p) != "/" and not p.exists():
             p = p.parent
         self.start_path = str(p) if p.exists() else "/"
+        self._current_dir = self.start_path
 
     def compose(self) -> ComposeResult:
         with Vertical(id="path-browser-box"):
             yield Static(
-                "  Pfad wählen   ↑↓ navigieren  Space/Enter=auswählen  Esc=abbrechen",
+                "  Pfad wählen   ↑↓ navigieren  Space=auswählen  F5=Neuer Ordner  Esc=abbrechen",
                 id="browser-title",
             )
             yield Static(self.start_path, id="browser-current")
@@ -680,7 +710,8 @@ class PathBrowserScreen(ModalScreen):
         self.dismiss(str(event.path))
 
     def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
-        self.query_one("#browser-current", Static).update(str(event.path))
+        self._current_dir = str(event.path)
+        self.query_one("#browser-current", Static).update(self._current_dir)
 
     def _cursor_path(self) -> Optional[str]:
         tree = self.query_one("#browser-tree", RobustDirectoryTree)
@@ -695,6 +726,117 @@ class PathBrowserScreen(ModalScreen):
         p = self._cursor_path()
         if p:
             self.dismiss(p)
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss(None)
+
+    def action_new_folder(self) -> None:
+        # Aktuellen Ordner aus Cursor ermitteln
+        raw = self._cursor_path()
+        if raw:
+            p = Path(raw)
+            self._current_dir = str(p if p.is_dir() else p.parent)
+
+        target_dir = self._current_dir
+
+        def _on_name(name: Optional[str]) -> None:
+            if not name:
+                return
+            new_path = Path(target_dir) / name
+            try:
+                new_path.mkdir(parents=False, exist_ok=False)
+                tree = self.query_one("#browser-tree", RobustDirectoryTree)
+                tree.reload()
+                self.query_one("#browser-current", Static).update(str(new_path))
+            except Exception as e:
+                self.query_one("#browser-current", Static).update(f"Fehler: {e}")
+
+        self.app.push_screen(NewFolderScreen(), _on_name)
+
+
+class PCloudBrowserScreen(ModalScreen):
+    """pCloud-Dateibaum-Browser zur Pfadauswahl."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Abbrechen"),
+        Binding("space", "select_current", "Auswählen"),
+    ]
+
+    def __init__(self, cfg: Any) -> None:
+        super().__init__()
+        self.cfg = cfg
+        self._current_path = "/"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="path-browser-box"):
+            yield Static(
+                "  ☁ pCloud-Pfad wählen   ↑↓ navigieren  Space/Enter=auswählen  Esc=abbrechen",
+                id="browser-title",
+            )
+            yield Static("/", id="browser-current")
+            yield Tree("/", id="pcloud-browse-tree")
+
+    def on_mount(self) -> None:
+        tree = self.query_one("#pcloud-browse-tree", Tree)
+        tree.root.data = {"id": 0, "is_folder": True, "name": "", "loaded": False}
+        self._load_node(tree.root, 0)
+        tree.root.expand()
+
+    def _load_node(self, node, folderid: int) -> None:
+        try:
+            res = pc.listfolder(self.cfg, folderid=folderid)
+            if res.get("result") == 0:
+                for item in sorted(
+                    res.get("metadata", {}).get("contents", []),
+                    key=lambda x: (not x["isfolder"], x["name"].lower()),
+                ):
+                    if item["isfolder"]:
+                        child = node.add(
+                            Text("📁 " + item["name"], style="bold"),
+                            data={"id": item["folderid"], "is_folder": True,
+                                  "name": item["name"], "loaded": False},
+                        )
+                        child.add_leaf("⋯", data=None)
+                    else:
+                        node.add_leaf(
+                            Text("📄 " + item["name"]),
+                            data={"id": item["fileid"], "is_folder": False, "name": item["name"]},
+                        )
+        except Exception:
+            pass
+        if node.data:
+            node.data["loaded"] = True
+
+    def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
+        node = event.node
+        if node.data and not node.data.get("loaded") and node.data.get("is_folder"):
+            node.remove_children()
+            self._load_node(node, node.data["id"])
+
+    def _node_path(self, node) -> str:
+        parts = []
+        n = node
+        while n and n.parent is not None:
+            if n.data and n.data.get("name"):
+                parts.append(n.data["name"])
+            n = n.parent
+        return "/" if not parts else "/" + "/".join(reversed(parts))
+
+    def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
+        node = event.node
+        if node and node.data and isinstance(node.data, dict):
+            path = self._node_path(node)
+            self._current_path = path
+            self.query_one("#browser-current", Static).update(path)
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        node = event.node
+        if node and node.data and isinstance(node.data, dict):
+            if not node.data.get("is_folder"):
+                self.dismiss(self._node_path(node))
+
+    def action_select_current(self) -> None:
+        self.dismiss(self._current_path)
 
     def action_dismiss_screen(self) -> None:
         self.dismiss(None)
@@ -839,6 +981,20 @@ class ScriptFormScreen(ModalScreen):
             if isinstance(p, dict) and p.get("name") and not p.get("ui_only")
         ]
 
+    @staticmethod
+    def _is_pcloud_param(param: dict) -> bool:
+        """Heuristik: Ist dieser String-Parameter ein pCloud-Pfad?"""
+        default = str(param.get("default") or "")
+        help_text = str(param.get("help") or "").lower()
+        label = str(param.get("label") or "").lower()
+        return (
+            default.startswith("/Backup")
+            or "pcloud" in help_text
+            or "pcloud" in label
+            or "im backup" in label
+            or "im backup" in help_text
+        )
+
     def compose(self) -> ComposeResult:
         name = self.script.get("name", "Script")
         desc = self.script.get("description", "")
@@ -863,8 +1019,8 @@ class ScriptFormScreen(ModalScreen):
                     if ptype == "bool":
                         default_on = bool(value)
                         with RadioSet(id=widget_id, classes="bool-set"):
-                            yield RadioButton("✓  Ja", value=default_on)
-                            yield RadioButton("✗  Nein", value=not default_on)
+                            yield RadioButton("✓  Ja", value=default_on, classes="bool-yes")
+                            yield RadioButton("✗  Nein", value=not default_on, classes="bool-no")
                     elif ptype == "select":
                         options = param.get("options") or []
                         sel_opts = [(o, o) for o in options]
@@ -881,12 +1037,23 @@ class ScriptFormScreen(ModalScreen):
                             )
                             yield Button("📁", id=browse_id, classes="path-browse-btn")
                     else:
-                        yield Input(
-                            value=str(value) if value is not None else "",
-                            placeholder=help_text or label,
-                            id=widget_id,
-                            classes="param-widget",
-                        )
+                        if self._is_pcloud_param(param):
+                            pcbrowse_id = "pcbrowse__" + pname.replace("-", "_").replace(".", "_")
+                            with Horizontal(classes="path-row"):
+                                yield Input(
+                                    value=str(value) if value is not None else "",
+                                    placeholder=help_text or label,
+                                    id=widget_id,
+                                    classes="path-input",
+                                )
+                                yield Button("☁", id=pcbrowse_id, classes="path-browse-btn")
+                        else:
+                            yield Input(
+                                value=str(value) if value is not None else "",
+                                placeholder=help_text or label,
+                                id=widget_id,
+                                classes="param-widget",
+                            )
                     if help_text:
                         yield Static(f" {help_text}", classes="param-help")
             with Horizontal(id="form-buttons"):
@@ -916,6 +1083,19 @@ class ScriptFormScreen(ModalScreen):
                         pass
 
             self.app.push_screen(PathBrowserScreen(start_path=start), _on_path)
+
+        elif btn_id.startswith("pcbrowse__"):
+            pname_clean = btn_id[len("pcbrowse__"):]
+            input_id = "#param__" + pname_clean
+
+            def _on_pcloud_path(selected: Optional[str], _iid: str = input_id) -> None:
+                if selected:
+                    try:
+                        self.query_one(_iid, Input).value = selected
+                    except Exception:
+                        pass
+
+            self.app.push_screen(PCloudBrowserScreen(cfg=self.app.cfg), _on_pcloud_path)
 
     def action_dismiss_screen(self) -> None:
         self.dismiss(None)
