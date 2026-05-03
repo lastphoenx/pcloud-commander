@@ -432,7 +432,7 @@ class PCloudCommander(App):
         yield Horizontal(
             Vertical(
                 Label(f"📁 Local: {self.local_root}", classes="panel-label"),
-                RobustDirectoryTree(self.local_root, show_hidden=True),
+                RobustDirectoryTree(self.local_root),
                 id="left-pane",
             ),
             Vertical(
