@@ -10,6 +10,7 @@ import os
 import sys
 import argparse
 import threading
+import subprocess
 from pathlib import Path
 from typing import Optional, List
 
@@ -71,7 +72,7 @@ if not pc:
 # ==================== Textual UI ====================
 
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, DataTable, Static, DirectoryTree, Label
+from textual.widgets import Header, Footer, Static, DirectoryTree, Label, Tree
 from textual.containers import Container, Horizontal, Vertical
 from textual.binding import Binding
 from textual.screen import ModalScreen
@@ -87,25 +88,36 @@ class ConfirmModal(ModalScreen):
     CSS = """
     ConfirmModal {
         align: center middle;
+        background: rgba(0, 0, 0, 0.7);
     }
     #confirm-box {
         width: 60;
-        height: 9;
-        border: double #f1c40f;
-        background: #1a1a2e;
+        height: 11;
+        border: double #ff00ff;
+        background: #1a1a1a;
         padding: 1 2;
     }
     #confirm-msg {
-        height: 3;
+        height: 4;
         color: #ffffff;
         text-align: center;
+        text-style: bold;
     }
     #confirm-buttons {
         align: center middle;
         height: 3;
+        margin-top: 1;
     }
     Button {
         margin: 0 2;
+    }
+    #btn-yes {
+        background: #ff00ff;
+        color: #000000;
+    }
+    #btn-no {
+        background: #333333;
+        color: #ffffff;
     }
     """
 
@@ -130,6 +142,72 @@ class ConfirmModal(ModalScreen):
             self.dismiss(True)
 
 
+from textual.widgets import Button, SelectionList
+from textual.widgets.selection_list import Selection
+
+
+class ActionMenu(ModalScreen):
+    """Menü zur Auswahl von pcloud-tools Kommandos."""
+
+    CSS = """
+    ActionMenu {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.7);
+    }
+    #menu-box {
+        width: 80;
+        height: 20;
+        border: double #7dcfff;
+        background: #1a1b26;
+        padding: 1 2;
+    }
+    #menu-title {
+        height: 2;
+        color: #bb9af7;
+        text-align: center;
+        text-style: bold;
+    }
+    SelectionList {
+        height: 1fr;
+        border: solid #414868;
+        background: #1a1b26;
+    }
+    #menu-buttons {
+        align: center middle;
+        height: 3;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, actions: List[tuple[str, str]]) -> None:
+        super().__init__()
+        self.actions = actions
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="menu-box"):
+            yield Label("Select Action to Run", id="menu-title")
+            yield SelectionList[str](
+                *[Selection(label, cmd, False) for label, cmd in self.actions]
+            )
+            with Horizontal(id="menu-buttons"):
+                yield Button("Run [Enter]", variant="success", id="btn-run")
+                yield Button("Cancel [Esc]", variant="primary", id="btn-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-run":
+            selected = self.query_one(SelectionList).selected
+            self.dismiss(selected[0] if selected else None)
+        else:
+            self.dismiss(None)
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(None)
+        elif event.key == "enter":
+            selected = self.query_one(SelectionList).selected
+            self.dismiss(selected[0] if selected else None)
+
+
 class PCloudCommander(App):
     """pCloud Commander TUI."""
     
@@ -144,64 +222,93 @@ class PCloudCommander(App):
         Binding("tab", "switch_pane", "Switch Pane"),
         Binding("d", "download", "Download", show=True),
         Binding("f8", "delete", "Delete", show=True),
+        Binding("a", "launch", "Actions", show=True),
     ]
     
     CSS = """
+    Screen {
+        background: #1a1b26;
+        color: #a9b1d6;
+    }
+
     #left-pane, #right-pane {
         width: 1fr;
         height: 1fr;
-        border: solid #34495e;
+        border: solid #24283b;
+        background: #1a1b26;
     }
     #left-pane.active-pane, #right-pane.active-pane {
-        border: thick #f1c40f;
+        border: double #7dcfff; /* Cyan border for active pane */
     }
     
     /* Panel Headers */
     .panel-label {
         height: 1;
-        background: #34495e;
-        color: #ffffff;
+        background: #24283b;
+        color: #7982a9;
         padding: 0 1;
         text-style: bold;
     }
     .active-pane .panel-label {
-        background: #f1c40f;
-        color: #000000;
+        background: #bb9af7; /* Lavender for active header */
+        color: #1a1b26;
     }
 
     /* DirectoryTree (Local) */
     DirectoryTree {
         height: 1fr;
-        background: $surface;
+        background: #1a1b26;
+        color: #a9b1d6;
     }
     DirectoryTree > .directory-tree--cursor {
-        background: #f1c40f;
+        background: #f1c40f; /* Yellow cursor like MC/Toad */
         color: #000000;
+        text-style: bold;
+    }
+    DirectoryTree > .directory-tree--file {
+        color: #9ece6a; /* Muted Green for Files */
+    }
+    DirectoryTree > .directory-tree--folder {
+        color: #7aa2f7; /* Soft Blue for Folders */
         text-style: bold;
     }
 
-    /* DataTable (pCloud) */
-    DataTable {
+    /* pCloud Tree (right pane) */
+    #pcloud-tree {
         height: 1fr;
+        background: #1a1b26;
+        color: #a9b1d6;
+        scrollbar-background: #1a1b26;
+        scrollbar-color: #414868;
+        scrollbar-color-hover: #7dcfff;
     }
-    DataTable > .datatable--cursor {
+    #pcloud-tree > .tree--cursor {
         background: #f1c40f;
         color: #000000;
         text-style: bold;
+    }
+    #pcloud-tree .tree--guides {
+        color: #414868;
+    }
+    #pcloud-tree .tree--guides-hover {
+        color: #7dcfff;
+    }
+    #pcloud-tree .tree--label {
+        color: #a9b1d6;
     }
 
     /* Path & Status Bars */
     #path-bar {
         height: 1;
-        background: #f1c40f;
+        background: #f1c40f; /* Yellow bar like in screenshot */
         color: #000000;
         padding: 0 1;
         text-style: bold;
     }
     #status-bar {
         height: 1;
-        background: #2c3e50;
-        color: #bdc3c7;
+        background: #414868; /* Distinct blue-grey for status bar */
+        color: #c0caf5;
         padding: 0 1;
         text-style: italic;
     }
@@ -211,9 +318,6 @@ class PCloudCommander(App):
         super().__init__()
         self.env_file = find_env_file()
         self.cfg = pc.effective_config(env_file=self.env_file, overrides=cfg_overrides)
-        self.current_folderid = 0
-        self.history: List[tuple[int, str]] = []
-        self.current_path_str = "/"
         # Fallback auf / falls /srv nicht existiert (lokale Entwicklung)
         self.local_root = local_root if Path(local_root).exists() else "/"
         self.active_pane = "right"  # Startfokus auf pCloud
@@ -230,7 +334,7 @@ class PCloudCommander(App):
             ),
             Vertical(
                 Label("☁  pCloud: /", classes="panel-label", id="pcloud-label"),
-                DataTable(cursor_type="row"),
+                Tree("/", id="pcloud-tree"),
                 id="right-pane",
             ),
         )
@@ -238,10 +342,54 @@ class PCloudCommander(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        table = self.query_one(DataTable)
-        table.add_columns("Name", "Size", "Modified", "ID")
         self._apply_pane_focus()
-        self.refresh_list()
+        self.call_after_refresh(self._init_pcloud_tree)
+
+    def _init_pcloud_tree(self) -> None:
+        """Root-Ebene des pCloud-Baums laden."""
+        tree = self.query_one("#pcloud-tree", Tree)
+        tree.root.data = {"id": 0, "is_folder": True, "name": "", "loaded": False}
+        self._load_tree_node(tree.root, 0)
+        tree.root.expand()
+
+    def _load_tree_node(self, node, folderid: int) -> None:
+        """pCloud-Ordner-Inhalt lazy in einen Tree-Knoten laden."""
+        try:
+            res = pc.listfolder(self.cfg, folderid=folderid)
+            if res.get("result") == 0:
+                contents = res.get("metadata", {}).get("contents", [])
+                for item in sorted(contents, key=lambda x: (not x["isfolder"], x["name"].lower())):
+                    if item["isfolder"]:
+                        child = node.add(
+                            f"📁 {item['name']}",
+                            data={"id": item["folderid"], "is_folder": True,
+                                  "name": item["name"], "loaded": False},
+                        )
+                        child.add_leaf("⋯", data=None)  # Platzhalter für expandierbaren Pfeil
+                    else:
+                        size_str = self._format_size(item["size"])
+                        node.add_leaf(
+                            f"📄 {item['name']}  [{size_str}]",
+                            data={"id": item["fileid"], "is_folder": False,
+                                  "name": item["name"], "size": item["size"],
+                                  "mtime": item.get("modified", "")},
+                        )
+            else:
+                self.notify(f"API Error: {res.get('error')}", severity="error")
+        except Exception as e:
+            self.notify(f"Connection Error: {e}", severity="error")
+        if node.data:
+            node.data["loaded"] = True
+
+    def _node_path_str(self, node) -> str:
+        """Baut den pCloud-Pfad-String aus der Node-Hierarchie."""
+        parts = []
+        n = node
+        while n and n.parent is not None:  # Root-Node hat parent=None
+            if n.data and n.data.get("name"):
+                parts.append(n.data["name"])
+            n = n.parent
+        return "/" if not parts else "/" + "/".join(reversed(parts)) + "/"
 
     def _apply_pane_focus(self) -> None:
         left = self.query_one("#left-pane")
@@ -253,76 +401,120 @@ class PCloudCommander(App):
         else:
             right.add_class("active-pane")
             left.remove_class("active-pane")
-            self.query_one(DataTable).focus()
+            self.query_one("#pcloud-tree", Tree).focus()
 
     def action_switch_pane(self) -> None:
         self.active_pane = "left" if self.active_pane == "right" else "right"
         self._apply_pane_focus()
 
     def refresh_list(self):
-        table = self.query_one(DataTable)
-        table.clear()
-        
-        # Pfad-Anzeige aktualisieren
-        path_bar = self.query_one("#path-bar", Static)
-        path_bar.update(f"Current Path: {self.current_path_str}")
-        
-        pcloud_label = self.query_one("#pcloud-label", Label)
-        pcloud_label.update(f"☁  pCloud: {self.current_path_str}")
-
-        try:
-            res = pc.listfolder(self.cfg, folderid=self.current_folderid)
-            if res.get("result") == 0:
-                metadata = res.get("metadata", {})
-                contents = metadata.get("contents", [])
-                
-                for item in sorted(contents, key=lambda x: (not x["isfolder"], x["name"].lower())):
-                    name = item["name"]
-                    if item["isfolder"]:
-                        name = f"📁 {name}/"
-                        size = "-"
-                        item_id = item["folderid"]
-                    else:
-                        name = f"📄 {name}"
-                        size = self._format_size(item["size"])
-                        item_id = item["fileid"]
-                    
-                    mtime = item.get("modified", "")
-                    table.add_row(name, size, mtime, str(item_id), key=str(item_id))
-            else:
-                self.notify(f"API Error: {res.get('error')}", severity="error")
-        except Exception as e:
-            self.notify(f"Connection Error: {str(e)}", severity="error")
-
-    def on_data_table_row_selected(self, event: DataTable.RowSelected):
-        """Navigation beim Drücken von Enter."""
-        row_data = self.query_one(DataTable).get_row(event.row_key)
-        name_with_icon = str(row_data[0])
-        item_id = int(row_data[3])
-        
-        if "📁" in name_with_icon:
-            # Es ist ein Ordner
-            folder_name = name_with_icon.replace("📁 ", "").rstrip("/")
-            self.history.append((self.current_folderid, folder_name))
-            self.current_folderid = item_id
-            self._update_path_str()
-            self.refresh_list()
+        """Baut den pCloud-Baum komplett neu auf (Root-Ebene)."""
+        tree = self.query_one("#pcloud-tree", Tree)
+        tree.root.remove_children()
+        if tree.root.data:
+            tree.root.data["loaded"] = False
         else:
-            # Es ist eine Datei
-            self.notify(f"File selected: {name_with_icon}", severity="information")
+            tree.root.data = {"id": 0, "is_folder": True, "name": "", "loaded": False}
+        self._load_tree_node(tree.root, 0)
+        tree.root.expand()
+        self.query_one("#path-bar", Static).update("pCloud: /")
+        self.query_one("#pcloud-label", Label).update("☁  pCloud: /")
+
+    def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
+        """Lazy-Load: Ordner-Inhalt beim ersten Aufklappen laden."""
+        node = event.node
+        if node.data and not node.data.get("loaded") and node.data.get("is_folder"):
+            node.remove_children()
+            self._load_tree_node(node, node.data["id"])
+
+    def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
+        """Pfad-Bar beim Cursor-Bewegen aktualisieren."""
+        node = event.node
+        if node and node.data:
+            path = self._node_path_str(node)
+            self.query_one("#path-bar", Static).update(f"pCloud: {path}")
+            self.query_one("#pcloud-label", Label).update(f"☁  pCloud: {path}")
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        """Enter auf Datei: kurze Info + Tastenbelegung anzeigen."""
+        node = event.node
+        if node.data and not node.data.get("is_folder"):
+            name = node.data.get("name", "")
+            size = self._format_size(node.data.get("size", 0))
+            self.notify(f"📄 {name}  {size}  │  d=download  F8=delete", severity="information")
 
     def _get_selected_row(self):
-        """Gibt (name_raw, item_id, is_folder) der aktuell markierten Zeile zurück."""
-        table = self.query_one(DataTable)
-        if table.cursor_row is None or table.row_count == 0:
+        """Gibt (name_raw, item_id, is_folder) des aktuell markierten Tree-Knotens zurück."""
+        tree = self.query_one("#pcloud-tree", Tree)
+        node = tree.cursor_node
+        if node is None or node.data is None:
             return None, None, None
-        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-        row_data = table.get_row(row_key)
-        name_with_icon = str(row_data[0])
-        item_id = int(row_data[3])
-        is_folder = "📁" in name_with_icon
-        name_raw = name_with_icon.replace("📁 ", "").replace("📄 ", "").rstrip("/")
-        return name_raw, item_id, is_folder
+        d = node.data
+        return d.get("name"), d.get("id"), d.get("is_folder", False)
+
+    def action_launch(self) -> None:
+        """A — Menü mit pcloud-tools Kommandos öffnen."""
+        actions = []
+        
+        # Lokale Datei ausgewählt?
+        local_sel = None
+        if self.active_pane == "left":
+            tree = self.query_one(DirectoryTree)
+            if tree.cursor_node and tree.cursor_node.data:
+                local_sel = str(tree.cursor_node.data.path)
+        
+        # pCloud Datei ausgewählt?
+        pcloud_name, pcloud_id, pcloud_is_folder = self._get_selected_row()
+        
+        # Generische Aktionen
+        actions.append(("Refresh pCloud List", "refresh"))
+        
+        if local_sel:
+            path_obj = Path(local_sel)
+            if path_obj.is_file():
+                actions.append((f"Upload to pCloud: {path_obj.name}", f"upload_file:{local_sel}"))
+            elif path_obj.is_dir():
+                actions.append((f"Sync Folder to pCloud: {path_obj.name}", f"sync_dir:{local_sel}"))
+
+        if pcloud_name and not pcloud_is_folder:
+             actions.append((f"Download from pCloud: {pcloud_name}", "download"))
+
+        def _on_action(cmd_key: Optional[str]) -> None:
+            if not cmd_key:
+                return
+            
+            if cmd_key == "refresh":
+                self.refresh_list()
+            elif cmd_key == "download":
+                self.action_download()
+            elif cmd_key.startswith("upload_file:"):
+                local_path = cmd_key.split(":", 1)[1]
+                self._run_tool("pcloud_simple_upload.py", [local_path, str(self.current_folderid)])
+            elif cmd_key.startswith("sync_dir:"):
+                local_path = cmd_key.split(":", 1)[1]
+                # Beispiel für pcloud_quick_delta.py
+                self._run_tool("pcloud_quick_delta.py", ["--src", local_path, "--dst-id", str(self.current_folderid)])
+
+        self.push_screen(ActionMenu(actions), _on_action)
+
+    def _run_tool(self, script_name: str, args: List[str]):
+        """Führt ein pcloud-tools Skript aus (suspendiert TUI)."""
+        # Pfad zum Skript finden (im gleichen Verzeichnis wie pcloud_bin_lib.py)
+        script_path = os.path.join(os.path.dirname(pc_path), script_name)
+        if not os.path.exists(script_path):
+            self.notify(f"Script not found: {script_name}", severity="error")
+            return
+
+        cmd = [sys.executable, script_path] + args
+        
+        def run_in_suspend():
+            with self.suspend():
+                print(f"\n>>> Running: {' '.join(cmd)}\n")
+                subprocess.run(cmd)
+                input("\nPress Enter to return to Commander...")
+            self.refresh_list()
+
+        run_in_suspend()
 
     def action_download(self) -> None:
         """d — Markierte Datei nach DEFAULT_DOWNLOAD_DIR herunterladen."""
@@ -390,25 +582,20 @@ class PCloudCommander(App):
 
 
     def action_up(self):
-        """Eine Ebene nach oben gehen."""
-        if self.active_pane == "right" and self.history:
-            prev_folderid, _ = self.history.pop()
-            self.current_folderid = prev_folderid
-            self._update_path_str()
-            self.refresh_list()
-        elif self.active_pane == "left":
-            # DirectoryTree hat eigene Navigation, aber wir könnten hier '..' Logik einbauen
-            pass
+        """Eine Ebene nach oben: im pCloud-Tree zum Eltern-Knoten."""
+        if self.active_pane == "right":
+            tree = self.query_one("#pcloud-tree", Tree)
+            node = tree.cursor_node
+            if node and node.parent is not None and node.parent.parent is not None:
+                # Aktuellen Knoten einklappen (falls Ordner und geöffnet)
+                if node.is_expanded:
+                    node.collapse()
+                tree.move_cursor(node.parent)
+            elif node and node.parent is not None and node.parent.parent is None:
+                # Wir sind bereits auf Root-Ebene
+                self.notify("Already at root.", severity="warning")
         else:
-            self.notify("Already at root.", severity="warning")
-
-    def _update_path_str(self):
-        """Baut den Pfad-String aus der History."""
-        if not self.history:
-            self.current_path_str = "/"
-        else:
-            names = [h[1] for h in self.history]
-            self.current_path_str = "/" + "/".join(names) + "/"
+            pass  # DirectoryTree hat eigene Navigation
 
     def _format_size(self, size):
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
