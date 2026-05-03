@@ -508,6 +508,13 @@ CUSTOM_CSS = """
         color: $text-muted;
         text-style: italic;
     }
+    .risk-banner {
+        height: 1;
+        background: $error;
+        color: #ffffff;
+        text-style: bold;
+        padding: 0 2;
+    }
     #form-buttons {
         height: 3;
         align: center middle;
@@ -911,7 +918,7 @@ class ScriptDashboardScreen(ModalScreen):
                 risk = script.get("risk_level", "")
                 dur = script.get("estimated_duration", "")
                 risk_txt = str(risk).lower().strip()
-                danger_prefix = "[HIGH-RISK] " if risk_txt == "high" else ""
+                danger_prefix = "[bold white on #c0392b] ⚠ HIGH-RISK ⚠ [/bold white on #c0392b] " if risk_txt == "high" else ""
                 badge = f"  [dim]{risk}  {dur}[/dim]" if (risk or dur) else ""
                 lv.append(ListItem(Static(f"  {danger_prefix}{name}{badge}")))
                 self._entries.append({"type": "script", "catalog_idx": catalog_idx})
@@ -940,7 +947,11 @@ class ScriptDashboardScreen(ModalScreen):
             if isinstance(p, dict) and not p.get("ui_only") and p.get("name")
         ]
         cmd_preview = str(script.get("cmd", ""))
-        warning = "\n[bold]WARNING:[/bold] High-risk script. Review parameters before start." if str(risk).lower() == "high" else ""
+        warning = (
+            "\n[bold white on #c0392b] ⚠ HIGH-RISK: review parameters before start ⚠ [/bold white on #c0392b]"
+            if str(risk).lower() == "high"
+            else ""
+        )
         detail.update(
             f"[bold]{name}[/bold]\n\n"
             f"{desc}\n\n"
@@ -1078,7 +1089,7 @@ class ScriptFormScreen(ModalScreen):
             yield Static(f" {desc}", id="form-desc")
             yield Static(f" Risk: {risk}   Duration: {dur}   F10=Run", id="form-badges")
             if high_risk:
-                yield Static(" WARNING: HIGH-RISK script. Verify all options carefully.", classes="param-help")
+                yield Static(" ⚠ HIGH-RISK: Verify all options carefully before start. ⚠ ", classes="risk-banner")
             yield Static("", id="form-divider")
             with VerticalScroll(id="form-params"):
                 for param in self._params:
