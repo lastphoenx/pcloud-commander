@@ -93,8 +93,8 @@ class PCloudCommander(App):
     }
     #path-bar {
         height: 1;
-        background: $primary-darken-2;
-        color: $text;
+        background: #1a252f;
+        color: #5dade2;
         padding: 0 1;
         text-style: bold;
     }
