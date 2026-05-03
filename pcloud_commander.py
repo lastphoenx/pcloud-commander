@@ -524,8 +524,12 @@ CUSTOM_CSS = """
     }
 
     /* ── Quick Upload Wizard ───────────────────────────────────── */
+    QuickUploadModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.85);
+    }
     #quick-upload-box {
-        width: 80;
+        width: 85;
         height: auto;
         border: double $primary;
         background: $surface;
