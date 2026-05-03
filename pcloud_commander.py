@@ -90,7 +90,8 @@ from textual.app import App, ComposeResult
 from textual.theme import Theme
 from textual.widgets import (
     Header, Footer, Static, DirectoryTree, Label, Tree,
-    OptionList, Button, Input, Switch, Select, ListView, ListItem,
+    OptionList, Button, Input, Select, ListView, ListItem,
+    RadioSet, RadioButton,
 )
 from textual.widgets.option_list import Option
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
@@ -513,6 +514,71 @@ CUSTOM_CSS = """
         align: center middle;
         margin: 1 0;
     }
+
+    /* ── Bool Toggle ─────────────────────────────────────────────── */
+    .bool-set {
+        height: 3;
+        width: 1fr;
+        background: $surface;
+        border: none;
+    }
+    .bool-set RadioButton {
+        height: 1;
+        padding: 0 2;
+        width: auto;
+    }
+    .bool-set RadioButton.-on Label {
+        text-style: bold;
+    }
+    /* "Ja" RadioButton (index 0) */
+    .bool-set RadioButton:first-child.-on {
+        color: $success;
+    }
+    /* "Nein" RadioButton (index 1) */
+    .bool-set RadioButton:last-child.-on {
+        color: $error;
+    }
+
+    /* ── Path row (input + browse button) ───────────────────────── */
+    .path-row {
+        height: 3;
+        width: 1fr;
+    }
+    .path-input {
+        width: 1fr;
+    }
+    .path-browse-btn {
+        width: 6;
+        min-width: 6;
+        margin-left: 1;
+        background: $panel;
+    }
+
+    /* ── Path Browser ────────────────────────────────────────────── */
+    PathBrowserScreen {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.85);
+    }
+    #path-browser-box {
+        width: 65%;
+        height: 80%;
+        border: double $primary;
+        background: $surface;
+    }
+    #browser-title {
+        height: 1;
+        background: $panel;
+        color: $primary;
+        text-style: bold;
+        padding: 0 1;
+    }
+    #browser-current {
+        height: 1;
+        background: $surface;
+        color: $foreground;
+        padding: 0 2;
+        text-style: italic;
+    }
     """
 
 
@@ -579,6 +645,59 @@ class ActionMenu(ModalScreen):
             if option_list.highlighted is not None:
                 option = option_list.get_option_at_index(option_list.highlighted)
                 self.dismiss(option.id)
+
+
+# ==================== Path Browser ====================
+
+
+class PathBrowserScreen(ModalScreen):
+    """Lokaler Datei-Browser zur Pfadauswahl. Space/Enter = auswählen, Esc = abbrechen."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Abbrechen"),
+        Binding("space", "select_current", "Auswählen"),
+    ]
+
+    def __init__(self, start_path: str = "/") -> None:
+        super().__init__()
+        p = Path(start_path)
+        if p.is_file():
+            p = p.parent
+        while str(p) != "/" and not p.exists():
+            p = p.parent
+        self.start_path = str(p) if p.exists() else "/"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="path-browser-box"):
+            yield Static(
+                "  Pfad wählen   ↑↓ navigieren  Space/Enter=auswählen  Esc=abbrechen",
+                id="browser-title",
+            )
+            yield Static(self.start_path, id="browser-current")
+            yield RobustDirectoryTree(self.start_path, id="browser-tree")
+
+    def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
+        self.dismiss(str(event.path))
+
+    def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
+        self.query_one("#browser-current", Static).update(str(event.path))
+
+    def _cursor_path(self) -> Optional[str]:
+        tree = self.query_one("#browser-tree", RobustDirectoryTree)
+        node = tree.cursor_node
+        if node and node.data:
+            path_obj = getattr(node.data, "path", None)
+            if path_obj:
+                return str(path_obj)
+        return None
+
+    def action_select_current(self) -> None:
+        p = self._cursor_path()
+        if p:
+            self.dismiss(p)
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss(None)
 
 
 # ==================== Script Dashboard + Form ====================
@@ -742,12 +861,25 @@ class ScriptFormScreen(ModalScreen):
 
                     yield Label(label, classes="param-label")
                     if ptype == "bool":
-                        yield Switch(value=bool(value), id=widget_id, classes="param-widget")
+                        default_on = bool(value)
+                        with RadioSet(id=widget_id, classes="bool-set"):
+                            yield RadioButton("✓  Ja", value=default_on)
+                            yield RadioButton("✗  Nein", value=not default_on)
                     elif ptype == "select":
                         options = param.get("options") or []
                         sel_opts = [(o, o) for o in options]
                         sel_val = str(value) if value is not None else (options[0] if options else Select.BLANK)
                         yield Select(sel_opts, value=sel_val, id=widget_id, classes="param-widget")
+                    elif ptype == "path":
+                        browse_id = "browse__" + pname.replace("-", "_").replace(".", "_")
+                        with Horizontal(classes="path-row"):
+                            yield Input(
+                                value=str(value) if value is not None else "",
+                                placeholder=help_text or label,
+                                id=widget_id,
+                                classes="path-input",
+                            )
+                            yield Button("📁", id=browse_id, classes="path-browse-btn")
                     else:
                         yield Input(
                             value=str(value) if value is not None else "",
@@ -762,10 +894,28 @@ class ScriptFormScreen(ModalScreen):
                 yield Button("Cancel [Esc]", id="btn-form-cancel", variant="error")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-start":
+        btn_id = event.button.id or ""
+        if btn_id == "btn-start":
             self.dismiss(self._collect_values())
-        elif event.button.id == "btn-form-cancel":
+        elif btn_id == "btn-form-cancel":
             self.dismiss(None)
+        elif btn_id.startswith("browse__"):
+            pname_clean = btn_id[len("browse__"):]
+            input_id = "#param__" + pname_clean
+            try:
+                current_val = self.query_one(input_id, Input).value
+            except Exception:
+                current_val = "/"
+            start = current_val if current_val and Path(current_val.split()[0]).parent.exists() else "/"
+
+            def _on_path(selected: Optional[str]) -> None:
+                if selected:
+                    try:
+                        self.query_one(input_id, Input).value = selected
+                    except Exception:
+                        pass
+
+            self.app.push_screen(PathBrowserScreen(start_path=start), _on_path)
 
     def action_dismiss_screen(self) -> None:
         self.dismiss(None)
@@ -781,7 +931,8 @@ class ScriptFormScreen(ModalScreen):
             widget_id = "#param__" + pname.replace("-", "_").replace(".", "_")
             try:
                 if ptype == "bool":
-                    result[pname] = self.query_one(widget_id, Switch).value
+                    rs = self.query_one(widget_id, RadioSet)
+                    result[pname] = (rs.pressed_index == 0)  # 0=Ja, 1=Nein
                 elif ptype == "select":
                     v = self.query_one(widget_id, Select).value
                     result[pname] = "" if v is Select.BLANK else v
