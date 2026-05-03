@@ -256,96 +256,89 @@ def build_theme(p: Palette) -> Theme:
     )
 
 
-def build_custom_css(p: Palette) -> str:
-    """Minimal CSS for OUR custom widgets only.
-
-    Everything that Textual's Theme system handles (Tree cursor, Header,
-    Footer, OptionList highlight, scrollbars, …) is NOT repeated here.
-    """
-    return f"""
+CUSTOM_CSS = """
     /* ── Panes ───────────────────────────────────────────────────── */
-    #left-pane, #right-pane {{
+    #left-pane, #right-pane {
         width: 1fr;
         height: 1fr;
-        border: solid {p.border};
-    }}
-    #left-pane.active-pane, #right-pane.active-pane {{
-        border: double {p.primary};
-    }}
+        border: solid $border-blurred;
+    }
+    #left-pane.active-pane, #right-pane.active-pane {
+        border: double $primary;
+    }
 
     /* ── Panel labels (pane headers) ─────────────────────────────── */
-    .panel-label {{
+    .panel-label {
         height: 1;
-        background: {p.panel};
-        color: {p.text_muted};
+        background: $panel;
+        color: $text-muted;
         padding: 0 1;
         text-style: bold;
-    }}
-    .active-pane .panel-label {{
-        color: {p.primary};
-    }}
+    }
+    .active-pane .panel-label {
+        color: $primary;
+    }
 
-    /* ── Folder color in DirectoryTree ────────────────────────────── */
-    DirectoryTree .directory-tree--folder {{
-        color: {p.folder};
-    }}
-    DirectoryTree .directory-tree--file {{
-        color: {p.file};
-    }}
+    /* ── Folder/file colors in DirectoryTree ──────────────────────── */
+    DirectoryTree .directory-tree--folder {
+        color: $primary;
+        text-style: bold;
+    }
+    DirectoryTree .directory-tree--file {
+        color: $foreground;
+    }
 
     /* ── Path bar ─────────────────────────────────────────────────── */
-    #path-bar {{
+    #path-bar {
         height: 1;
-        background: {p.panel};
-        color: {p.primary};
+        background: $panel;
+        color: $primary;
         padding: 0 1;
         text-style: bold;
-    }}
+    }
 
     /* ── Status bar ───────────────────────────────────────────────── */
-    #status-bar {{
+    #status-bar {
         height: 1;
-        background: {p.panel};
-        color: {p.text_dim};
+        background: $panel;
+        color: $text-disabled;
         padding: 0 1;
-    }}
+    }
 
     /* ── Modals ───────────────────────────────────────────────────── */
-    ActionMenu, ConfirmModal {{
+    ActionMenu, ConfirmModal {
         align: center middle;
         background: rgba(0, 0, 0, 0.8);
-    }}
-    #menu-box, #confirm-box {{
+    }
+    #menu-box, #confirm-box {
         width: 60;
         height: auto;
-        border: double {p.primary};
-        background: {p.overlay};
+        border: double $primary;
+        background: $surface;
         padding: 1 2;
-    }}
-    #menu-title, #confirm-msg {{
+    }
+    #menu-title, #confirm-msg {
         text-align: center;
         text-style: bold;
         margin-bottom: 1;
-    }}
+    }
 
     /* ── Buttons ──────────────────────────────────────────────────── */
-    #menu-buttons, #confirm-buttons {{
+    #menu-buttons, #confirm-buttons {
         align: center middle;
         height: 3;
         margin-top: 1;
-    }}
-    Button {{
+    }
+    Button {
         margin: 0 2;
         text-style: bold;
-    }}
-    #btn-run, #btn-yes {{
-        background: {p.success};
-        color: {p.accent_fg};
-    }}
-    #btn-cancel, #btn-no {{
-        background: {p.error};
-        color: #ffffff;
-    }}
+    }
+    #btn-run, #btn-yes {
+        background: $success;
+    }
+    #btn-cancel, #btn-no {
+        background: $error;
+    }
     """
 
 
@@ -424,6 +417,8 @@ class PCloudCommander(App):
     TITLE = "pCloud Commander"
     SUB_TITLE = "Interactive Dual-Pane Browser"
 
+    CSS = CUSTOM_CSS
+
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
@@ -446,14 +441,11 @@ class PCloudCommander(App):
         self._palette_name = palette_name
         self.palette = PALETTES.get(palette_name, PALETTES[DEFAULT_PALETTE])
 
-        # Register themes only once even if the app is reinstantiated.
+        # Register ALL palettes as Textual themes
         if not PCloudCommander._themes_registered:
             for pal in PALETTES.values():
                 self.register_theme(build_theme(pal))
             PCloudCommander._themes_registered = True
-
-        # Set custom CSS for our own widgets (pane borders, labels, modals)
-        self.CSS = build_custom_css(self.palette)
 
     def on_mount(self) -> None:
         # Activate the selected theme — this sets all $variables globally
