@@ -1002,6 +1002,55 @@ class ScriptFormScreen(ModalScreen):
             for p in self._params
             if str(p.get("type", "")) == "bool"
         }
+        self._binary_select_state: Dict[str, str] = {
+            str(p.get("name", "")): str(
+                initial_values.get(str(p.get("name", "")), p.get("default", "yes"))
+            ).lower()
+            for p in self._params
+            if self._is_yes_no_select(p)
+        }
+        self._enforce_mode_exclusive_pair()
+
+    @staticmethod
+    def _normalized_name(name: str) -> str:
+        return str(name).strip().lower().lstrip("-").replace("_", "-")
+
+    def _find_bool_key(self, target_normalized: str) -> Optional[str]:
+        for k in self._bool_state.keys():
+            if self._normalized_name(k) == target_normalized:
+                return k
+        return None
+
+    def _enforce_mode_exclusive_pair(self) -> None:
+        """Force: dry-run and execute are always opposite (no ja/ja and no nein/nein)."""
+        dry_key = self._find_bool_key("dry-run")
+        exec_key = self._find_bool_key("execute")
+        if dry_key and exec_key:
+            self._bool_state[exec_key] = not bool(self._bool_state.get(dry_key, True))
+
+    def _update_bool_button_visual(self, pname: str) -> None:
+        clean = pname.replace("-", "_").replace(".", "_")
+        yes_wid = "#boolyes__" + clean
+        no_wid = "#boolno__" + clean
+        val = bool(self._bool_state.get(pname, False))
+        try:
+            yes_btn = self.query_one(yes_wid, Button)
+            no_btn = self.query_one(no_wid, Button)
+            if val:
+                yes_btn.add_class("active")
+                no_btn.remove_class("active")
+            else:
+                no_btn.add_class("active")
+                yes_btn.remove_class("active")
+        except Exception:
+            pass
+
+    @staticmethod
+    def _is_yes_no_select(param: Dict[str, Any]) -> bool:
+        if str(param.get("type", "")) != "select":
+            return False
+        opts = [str(o).strip().lower() for o in (param.get("options") or [])]
+        return len(opts) == 2 and set(opts) == {"yes", "no"}
 
     @staticmethod
     def _is_pcloud_param(param: dict) -> bool:
@@ -1051,10 +1100,21 @@ class ScriptFormScreen(ModalScreen):
                             yield Button("✗  Nein", id=no_id,
                                          classes="bool-no" + (" active" if not default_on else ""))
                     elif ptype == "select":
-                        options = param.get("options") or []
-                        sel_opts = [(o, o) for o in options]
-                        sel_val = str(value) if value is not None else (options[0] if options else Select.BLANK)
-                        yield Select(sel_opts, value=sel_val, id=widget_id, classes="param-widget")
+                        if self._is_yes_no_select(param):
+                            selyes_id = "selyes__" + pname.replace("-", "_").replace(".", "_")
+                            selno_id = "selno__" + pname.replace("-", "_").replace(".", "_")
+                            val = self._binary_select_state.get(pname, "yes")
+                            yes_active = val == "yes"
+                            with Horizontal(classes="bool-row"):
+                                yield Button("✓  Ja", id=selyes_id,
+                                             classes="bool-yes" + (" active" if yes_active else ""))
+                                yield Button("✗  Nein", id=selno_id,
+                                             classes="bool-no" + (" active" if not yes_active else ""))
+                        else:
+                            options = param.get("options") or []
+                            sel_opts = [(o, o) for o in options]
+                            sel_val = str(value) if value is not None else (options[0] if options else Select.BLANK)
+                            yield Select(sel_opts, value=sel_val, id=widget_id, classes="param-widget")
                     elif ptype == "path":
                         browse_id = "browse__" + pname.replace("-", "_").replace(".", "_")
                         with Horizontal(classes="path-row"):
@@ -1106,8 +1166,34 @@ class ScriptFormScreen(ModalScreen):
                     pname_orig = pn
                     break
             self._bool_state[pname_orig] = is_yes
-            yes_wid = "#boolyes__" + pname_clean
-            no_wid  = "#boolno__" + pname_clean
+            changed_norm = self._normalized_name(pname_orig)
+            if changed_norm in {"dry-run", "execute"}:
+                if changed_norm == "dry-run":
+                    exec_key = self._find_bool_key("execute")
+                    if exec_key:
+                        self._bool_state[exec_key] = not is_yes
+                elif changed_norm == "execute":
+                    dry_key = self._find_bool_key("dry-run")
+                    if dry_key:
+                        self._bool_state[dry_key] = not is_yes
+                self._enforce_mode_exclusive_pair()
+                for k in self._bool_state.keys():
+                    self._update_bool_button_visual(k)
+            else:
+                self._update_bool_button_visual(pname_orig)
+        elif btn_id.startswith("selyes__") or btn_id.startswith("selno__"):
+            event.stop()
+            is_yes = btn_id.startswith("selyes__")
+            pname_clean = btn_id[len("selyes__"):] if is_yes else btn_id[len("selno__"):]
+            pname_orig = pname_clean
+            for p in self._params:
+                pn = str(p.get("name", ""))
+                if pn.replace("-", "_").replace(".", "_") == pname_clean:
+                    pname_orig = pn
+                    break
+            self._binary_select_state[pname_orig] = "yes" if is_yes else "no"
+            yes_wid = "#selyes__" + pname_clean
+            no_wid = "#selno__" + pname_clean
             try:
                 yes_btn = self.query_one(yes_wid, Button)
                 no_btn = self.query_one(no_wid, Button)
@@ -1166,8 +1252,11 @@ class ScriptFormScreen(ModalScreen):
                 if ptype == "bool":
                     result[pname] = self._bool_state.get(pname, bool(param.get("default", False)))
                 elif ptype == "select":
-                    v = self.query_one(widget_id, Select).value
-                    result[pname] = "" if v is Select.BLANK else v
+                    if self._is_yes_no_select(param):
+                        result[pname] = self._binary_select_state.get(pname, "yes")
+                    else:
+                        v = self.query_one(widget_id, Select).value
+                        result[pname] = "" if v is Select.BLANK else v
                 else:
                     result[pname] = self.query_one(widget_id, Input).value
             except Exception:
