@@ -18,7 +18,12 @@ import threading
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Any, Dict
+
+try:
+    import yaml
+except Exception:
+    yaml = None
 
 # ==================== Library Loading ====================
 
@@ -501,6 +506,7 @@ class PCloudCommander(App):
         self.download_dir = DEFAULT_DOWNLOAD_DIR
         self._palette_name = palette_name
         self.palette = PALETTES.get(palette_name, PALETTES[DEFAULT_PALETTE])
+        self.script_catalog = self._load_external_script_catalog()
 
         # Register ALL palettes and activate the selected one immediately
         for name, pal in PALETTES.items():
@@ -657,6 +663,152 @@ class PCloudCommander(App):
 
     # ── Actions ──────────────────────────────────────────────────
 
+    def _load_external_script_catalog(self) -> List[Dict[str, Any]]:
+        """Load script definitions from script-manager-ui YAML in read-only mode."""
+        if yaml is None:
+            return []
+
+        script_dir = Path(__file__).resolve().parent
+        candidates = [
+            script_dir.parent / "script-manager-ui" / "scripts.yaml",
+            Path("/opt/apps/script-manager-ui/scripts.yaml"),
+        ]
+
+        for path in candidates:
+            try:
+                if not path.exists():
+                    continue
+                data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                scripts = data.get("scripts", [])
+                if isinstance(scripts, list):
+                    return [s for s in scripts if isinstance(s, dict) and s.get("name") and s.get("cmd")]
+            except Exception:
+                continue
+        return []
+
+    def _load_env_file_vars(self, env_file_path: Path) -> Dict[str, str]:
+        vars_out: Dict[str, str] = {}
+        try:
+            for raw in env_file_path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                vars_out[key.strip()] = value.strip().strip('"').strip("'")
+        except Exception:
+            return {}
+        return vars_out
+
+    def _current_pcloud_target(self) -> tuple[int, str]:
+        """Return currently selected pCloud folder id + path string for autofill."""
+        tree = self.query_one("#pcloud-tree", Tree)
+        node = tree.cursor_node or tree.root
+        if node and node.data:
+            if node.data.get("is_folder"):
+                return node.data.get("id", 0), self._node_path_str(node)
+            if node.parent and node.parent.data:
+                return node.parent.data.get("id", 0), self._node_path_str(node.parent)
+        return 0, "/"
+
+    def _build_script_command(
+        self,
+        script: Dict[str, Any],
+        local_sel: Optional[str],
+        pcloud_folderid: int,
+        pcloud_path: str,
+    ) -> List[str]:
+        cmd = [str(script.get("cmd"))] + [str(a) for a in script.get("args", [])]
+        params = script.get("params", []) or []
+
+        for param in params:
+            if not isinstance(param, dict) or param.get("ui_only"):
+                continue
+
+            name = str(param.get("name", "")).strip()
+            if not name:
+                continue
+
+            p_type = str(param.get("type", "string"))
+            arg_mode = str(param.get("arg_mode", "flag"))
+            value = param.get("default")
+            lname = name.lower()
+
+            # Local path autofill for common source-like parameter names.
+            if p_type in {"path", "string"}:
+                if any(k in lname for k in ["local", "source", "src"]) and local_sel:
+                    value = local_sel
+                elif lname in {"src", "source", "local_path", "local-path"} and not value:
+                    value = local_sel or self.local_root
+
+            # pCloud autofill for common remote-like parameter names.
+            if p_type in {"path", "string", "int"}:
+                if any(k in lname for k in ["folderid", "dst-id", "dst_id", "remote_id"]):
+                    value = pcloud_folderid
+                elif any(k in lname for k in ["remote", "pcloud", "dst", "target_folder", "folder"]) and not value:
+                    value = pcloud_path
+
+            if p_type == "bool":
+                if bool(value):
+                    cmd.append(f"--{name}")
+                continue
+
+            if value in (None, ""):
+                continue
+
+            if arg_mode == "positional":
+                cmd.append(str(value))
+            else:
+                cmd.extend([f"--{name}", str(value)])
+
+        return cmd
+
+    def _run_catalog_script(
+        self,
+        script: Dict[str, Any],
+        local_sel: Optional[str],
+        pcloud_folderid: int,
+        pcloud_path: str,
+    ) -> None:
+        script_name = str(script.get("name", "Unnamed Script"))
+        cwd = str(script.get("cwd") or ".")
+
+        try:
+            cmd = self._build_script_command(script, local_sel, pcloud_folderid, pcloud_path)
+        except Exception as e:
+            self.notify(f"Cannot build command for {script_name}: {e}", severity="error")
+            return
+
+        env = os.environ.copy()
+
+        env_file = script.get("env_file")
+        if env_file:
+            env_path = Path(cwd) / str(env_file)
+            env_vars = self._load_env_file_vars(env_path)
+            if "PATH" in env_vars:
+                env_vars["PATH"] = f"{env_vars['PATH']}:{env.get('PATH', '')}"
+            if "PYTHONPATH" in env_vars:
+                env_vars["PYTHONPATH"] = f"{env_vars['PYTHONPATH']}:{env.get('PYTHONPATH', '')}"
+            env.update(env_vars)
+
+        inline_env = script.get("env", {}) or {}
+        if isinstance(inline_env, dict):
+            if "PATH" in inline_env:
+                inline_env["PATH"] = f"{inline_env['PATH']}:{env.get('PATH', '')}"
+            if "PYTHONPATH" in inline_env:
+                inline_env["PYTHONPATH"] = f"{inline_env['PYTHONPATH']}:{env.get('PYTHONPATH', '')}"
+            env.update({str(k): str(v) for k, v in inline_env.items()})
+
+        def run_in_suspend():
+            with self.suspend():
+                print(f"\n>>> Running catalog script: {script_name}\n")
+                print(f">>> CWD: {cwd}\n")
+                print(f">>> CMD: {' '.join(cmd)}\n")
+                subprocess.run(cmd, cwd=cwd, env=env)
+                input("\nPress Enter to return to Commander...")
+            self.refresh_list()
+
+        run_in_suspend()
+
     def _get_selected_row(self):
         tree = self.query_one("#pcloud-tree", Tree)
         node = tree.cursor_node
@@ -696,6 +848,16 @@ class PCloudCommander(App):
         if pcloud_name and not pcloud_is_folder:
             actions.append((f"Download from pCloud: {pcloud_name}", "download"))
 
+        pcloud_target_id, pcloud_target_path = self._current_pcloud_target()
+
+        if self.script_catalog:
+            for idx, script in enumerate(self.script_catalog):
+                script_name = script.get("name") or f"Script {idx + 1}"
+                label = f"Run Script: {script_name}"
+                actions.append((label, f"yaml_script:{idx}"))
+        else:
+            actions.append(("(No scripts.yaml catalog found)", "noop"))
+
         def _on_action(cmd_key: Optional[str]) -> None:
             if not cmd_key:
                 return
@@ -703,12 +865,26 @@ class PCloudCommander(App):
                 self.refresh_list()
             elif cmd_key == "download":
                 self.action_download()
+            elif cmd_key == "noop":
+                self.notify("No external scripts catalog available.", severity="warning")
             elif cmd_key.startswith("upload_file:"):
                 _, local_path, fid = cmd_key.split(":", 2)
                 self._run_tool("pcloud_simple_upload.py", [local_path, fid])
             elif cmd_key.startswith("sync_dir:"):
                 _, local_path, fid = cmd_key.split(":", 2)
                 self._run_tool("pcloud_quick_delta.py", ["--src", local_path, "--dst-id", fid])
+            elif cmd_key.startswith("yaml_script:"):
+                _, idx_text = cmd_key.split(":", 1)
+                idx = int(idx_text)
+                if 0 <= idx < len(self.script_catalog):
+                    self._run_catalog_script(
+                        self.script_catalog[idx],
+                        local_sel=local_sel,
+                        pcloud_folderid=pcloud_target_id,
+                        pcloud_path=pcloud_target_path,
+                    )
+                else:
+                    self.notify("Invalid script selection.", severity="error")
 
         self.push_screen(ActionMenu(actions), _on_action)
 
